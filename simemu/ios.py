@@ -459,20 +459,6 @@ def _logical_to_screen(
     return int(px + lx * scale_x), int(py + ly * scale_y)
 
 
-def _get_simulator_pid() -> int:
-    """Return the PID of the running Simulator.app process."""
-    result = subprocess.run(
-        ["pgrep", "-f", "Simulator.app/Contents/MacOS/Simulator"],
-        capture_output=True, text=True,
-    )
-    pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
-    if not pids:
-        raise RuntimeError(
-            "Simulator.app is not running. Boot a simulator first with: simemu boot <slug>"
-        )
-    return int(pids[0])
-
-
 # macOS virtual key codes used by Simulator.app shortcuts
 _VK_H = 4    # h
 _VK_L = 37   # l
@@ -480,20 +466,74 @@ _VK_S = 1    # s
 _VK_LEFT  = 123
 _VK_RIGHT = 124
 
-def _post_key(sim_pid: int, vk: int, modifiers: int = 0) -> None:
-    """Send a key-down + key-up event directly to Simulator.app without stealing focus."""
-    import importlib as _il
-    Quartz = _il.import_module("Quartz")
-    import time as _t
-    src = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStateHIDSystemState)
-    e_dn = Quartz.CGEventCreateKeyboardEvent(src, vk, True)
-    e_up = Quartz.CGEventCreateKeyboardEvent(src, vk, False)
+def _run_system_events(script: str) -> None:
+    """Execute a small System Events script, ignoring AppleScript UI noise."""
+    subprocess.run(["osascript", "-e", script], capture_output=True, check=False)
+
+
+def _post_key(vk: int, modifiers: tuple[str, ...] = ()) -> None:
+    """Send a Simulator keyboard shortcut via System Events.
+
+    CGEvent keyboard injection has become a silent no-op on recent macOS
+    setups. System Events is slower, but it reliably reaches Simulator.
+    """
+    using_clause = ""
     if modifiers:
-        Quartz.CGEventSetFlags(e_dn, modifiers)
-        Quartz.CGEventSetFlags(e_up, modifiers)
-    Quartz.CGEventPostToPid(sim_pid, e_dn)
-    _t.sleep(0.05)
-    Quartz.CGEventPostToPid(sim_pid, e_up)
+        using_clause = " using {" + ", ".join(modifiers) + "}"
+    _run_system_events(f'''
+tell application "System Events"
+    tell process "Simulator"
+        set frontmost to true
+        key code {vk}{using_clause}
+    end tell
+end tell''')
+
+
+def _click_simulator_at(x: int, y: int) -> None:
+    """Click global screen coordinates inside the Simulator process."""
+    _run_system_events(f'''
+tell application "System Events"
+    tell process "Simulator"
+        click at {{{x}, {y}}}
+    end tell
+end tell''')
+
+
+def _pct_string(x: int, y: int, width: int, height: int) -> str:
+    """Convert logical coordinates to Maestro percentage syntax."""
+    px = max(0.0, min(100.0, (x / width) * 100.0))
+    py = max(0.0, min(100.0, (y / height) * 100.0))
+    return f"{px:.2f}%, {py:.2f}%"
+
+
+def _run_maestro_flow(udid: str, commands: str) -> None:
+    """Run a small Maestro flow against the current foreground iOS app."""
+    if not shutil.which("maestro"):
+        raise RuntimeError("maestro is not installed or not on PATH")
+
+    flow = f"""appId: com.apple.springboard
+---
+{commands}"""
+
+    fd, flow_path = tempfile.mkstemp(prefix="simemu-ios-", suffix=".yaml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(flow)
+
+        result = subprocess.run(
+            ["maestro", "--device", udid, "test", flow_path, "--format", "NOOP", "--no-ansi"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(detail or "maestro test failed")
+    finally:
+        try:
+            os.unlink(flow_path)
+        except FileNotFoundError:
+            pass
 
 
 def _post_mouse_hidden(events_fn) -> None:
@@ -508,49 +548,39 @@ def _post_mouse_hidden(events_fn) -> None:
 
     loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
     orig = Quartz.CGPoint(x=loc.x, y=loc.y)
-    Quartz.CGDisplayHideCursor(Quartz.kCGDirectMainDisplay)
+    # Newer PyObjC bindings may omit kCGDirectMainDisplay while still exposing
+    # CGMainDisplayID(). Resolve the display ID dynamically so tap/swipe/press
+    # continue to work across Quartz binding versions.
+    if hasattr(Quartz, "CGMainDisplayID"):
+        display_id = Quartz.CGMainDisplayID()
+    else:
+        display_id = Quartz.kCGDirectMainDisplay
+    Quartz.CGDisplayHideCursor(display_id)
     try:
         events_fn(Quartz)
         Quartz.CGWarpMouseCursorPosition(orig)
     finally:
-        Quartz.CGDisplayShowCursor(Quartz.kCGDirectMainDisplay)
+        Quartz.CGDisplayShowCursor(display_id)
 
 
 def tap(udid: str, x: int, y: int) -> None:
     """Tap at logical-point coordinates on the simulator screen.
 
-    Raises the Simulator window to receive the click, hides the system cursor
-    during the event so the pointer does not visibly jump to the tap location.
+    Raises the Simulator window and sends a System Events click at the mapped
+    global screen coordinate. This is more reliable than CGEventPost-based
+    mouse injection on current macOS/PyObjC setups.
     """
-    import importlib as _il
-    Quartz = _il.import_module("Quartz")
-    import time as _t
-
     _ensure_booted(udid)
     device_name = _get_device_name(udid)
     device_w, device_h = _get_device_logical_size(device_name)
     px, py, sw, sh = _get_sim_bounds(udid)
     cx, cy = _logical_to_screen(x, y, px, py, sw, sh, device_w, device_h)
     _raise_sim_window(device_name)
-
-    def _click(Q):
-        src = Q.CGEventSourceCreate(Q.kCGEventSourceStateHIDSystemState)
-        pos = Q.CGPoint(x=cx, y=cy)
-        e_dn = Q.CGEventCreateMouseEvent(src, Q.kCGEventLeftMouseDown, pos, Q.kCGMouseButtonLeft)
-        e_up = Q.CGEventCreateMouseEvent(src, Q.kCGEventLeftMouseUp,   pos, Q.kCGMouseButtonLeft)
-        Q.CGEventPost(Q.kCGSessionEventTap, e_dn)
-        _t.sleep(0.05)
-        Q.CGEventPost(Q.kCGSessionEventTap, e_up)
-
-    _post_mouse_hidden(_click)
+    _click_simulator_at(cx, cy)
 
 
-def swipe(udid: str, x1: int, y1: int, x2: int, y2: int, duration: float = 0.3) -> None:
-    """Swipe from (x1,y1) to (x2,y2) in logical points over duration seconds.
-
-    Uses ~60fps drag events so iOS physics (sheet dismiss, scroll momentum) triggers correctly.
-    Cursor is hidden during the swipe so it does not visibly track across the screen.
-    """
+def _swipe_quartz(udid: str, x1: int, y1: int, x2: int, y2: int, duration: float) -> None:
+    """Fallback swipe backend using Quartz mouse drag events."""
     import importlib as _il
     Quartz = _il.import_module("Quartz")
     import time as _t
@@ -585,11 +615,33 @@ def swipe(udid: str, x1: int, y1: int, x2: int, y2: int, duration: float = 0.3) 
     _post_mouse_hidden(_drag)
 
 
-def long_press(udid: str, x: int, y: int, duration: float = 1.0) -> None:
-    """Long-press at a logical-point coordinate. duration in seconds (default 1.0).
+def swipe(udid: str, x1: int, y1: int, x2: int, y2: int, duration: float = 0.3) -> None:
+    """Swipe from (x1,y1) to (x2,y2) in logical points over duration seconds.
 
-    Cursor is hidden during the press so it does not visibly jump to the target.
+    Maestro is the preferred backend because it is materially more reliable on
+    current macOS/iOS Simulator setups. Quartz remains as a fallback.
     """
+    _ensure_booted(udid)
+    device_name = _get_device_name(udid)
+    device_w, device_h = _get_device_logical_size(device_name)
+    _raise_sim_window(device_name)
+
+    try:
+        _run_maestro_flow(
+            udid,
+            "\n".join([
+                "- swipe:",
+                f'    start: "{_pct_string(x1, y1, device_w, device_h)}"',
+                f'    end: "{_pct_string(x2, y2, device_w, device_h)}"',
+                f"    duration: {int(duration * 1000)}",
+            ]),
+        )
+    except Exception:
+        _swipe_quartz(udid, x1, y1, x2, y2, duration)
+
+
+def _long_press_quartz(udid: str, x: int, y: int, duration: float) -> None:
+    """Fallback long-press backend using Quartz mouse events."""
     import importlib as _il
     Quartz = _il.import_module("Quartz")
     import time as _t
@@ -613,22 +665,46 @@ def long_press(udid: str, x: int, y: int, duration: float = 1.0) -> None:
     _post_mouse_hidden(_press)
 
 
+def long_press(udid: str, x: int, y: int, duration: float = 1.0) -> None:
+    """Long-press at a logical-point coordinate. duration in seconds (default 1.0).
+
+    Maestro is used for the default press because it is more reliable than
+    Quartz-based mouse injection. Custom durations fall back to Quartz.
+    """
+    _ensure_booted(udid)
+    device_name = _get_device_name(udid)
+    device_w, device_h = _get_device_logical_size(device_name)
+    _raise_sim_window(device_name)
+
+    if abs(duration - 1.0) > 0.05:
+        _long_press_quartz(udid, x, y, duration)
+        return
+
+    try:
+        _run_maestro_flow(
+            udid,
+            "\n".join([
+                "- longPressOn:",
+                f'    point: "{_pct_string(x, y, device_w, device_h)}"',
+            ]),
+        )
+    except Exception:
+        _long_press_quartz(udid, x, y, duration)
+
+
 def rotate(udid: str, orientation: str) -> None:
     """Set device orientation: 'portrait', 'landscape', 'left', or 'right'.
 
     'portrait' and 'landscape' check the current state and only rotate if needed.
     'left' / 'right' always send one rotation in that direction.
-    Does not steal focus from the user's active application.
+    May bring Simulator to the front while sending the shortcut.
     """
     _ensure_booted(udid)
     orientation = orientation.lower()
-    sim_pid = _get_simulator_pid()
 
     if orientation in ("left", "right"):
         vk = _VK_LEFT if orientation == "left" else _VK_RIGHT
-        import importlib as _il
-        Quartz = _il.import_module("Quartz")
-        _post_key(sim_pid, vk, Quartz.kCGEventFlagMaskCommand)
+        _post_key(vk, ("command down",))
         return
 
     if orientation not in ("portrait", "landscape"):
@@ -638,21 +714,18 @@ def rotate(udid: str, orientation: str) -> None:
     px, py, sw, sh = _get_sim_bounds(udid)
     current = "landscape" if sw > sh else "portrait"
     if current != orientation:
-        import importlib as _il
-        Quartz = _il.import_module("Quartz")
-        _post_key(sim_pid, _VK_RIGHT, Quartz.kCGEventFlagMaskCommand)
+        _post_key(_VK_RIGHT, ("command down",))
 
 
-# Named key → (virtual key code, modifier flags mask, description)
-# Modifier flags: kCGEventFlagMaskCommand=0x100000, kCGEventFlagMaskShift=0x20000
+# Named key → (virtual key code, modifier names, description)
 _VK_V = 9   # v
 
-_IOS_KEYS: dict[str, tuple[int, int, str]] = {
-    "home":       (_VK_H, 0x120000, "Go to home screen (Cmd+Shift+H)"),
-    "lock":       (_VK_L, 0x100000, "Lock device (Cmd+L)"),
-    "siri":       (_VK_H, 0x100000, "Invoke Siri (Cmd+H)"),
-    "screenshot": (_VK_S, 0x120000, "System screenshot (Cmd+Shift+S)"),
-    "paste":      (_VK_V, 0x100000, "Paste clipboard (Cmd+V)"),
+_IOS_KEYS: dict[str, tuple[int, tuple[str, ...], str]] = {
+    "home":       (_VK_H, ("command down", "shift down"), "Go to home screen (Cmd+Shift+H)"),
+    "lock":       (_VK_L, ("command down",), "Lock device (Cmd+L)"),
+    "siri":       (_VK_H, ("command down",), "Invoke Siri (Cmd+H)"),
+    "screenshot": (_VK_S, ("command down", "shift down"), "System screenshot (Cmd+Shift+S)"),
+    "paste":      (_VK_V, ("command down",), "Paste clipboard (Cmd+V)"),
 }
 
 
@@ -660,7 +733,7 @@ def key(udid: str, key_name: str) -> None:
     """Press a named hardware key on the simulator.
 
     Supported: home, lock, siri, screenshot
-    Does not steal focus from the user's active application.
+    May bring Simulator to the front while sending the shortcut.
     """
     _ensure_booted(udid)
     k = key_name.lower()
@@ -669,7 +742,7 @@ def key(udid: str, key_name: str) -> None:
             f"Unknown iOS key '{key_name}'. Supported: {', '.join(_IOS_KEYS)}"
         )
     vk, modifiers, _ = _IOS_KEYS[k]
-    _post_key(_get_simulator_pid(), vk, modifiers)
+    _post_key(vk, modifiers)
 
 
 def status_bar(udid: str, time_str: Optional[str] = None, battery: Optional[int] = None,
