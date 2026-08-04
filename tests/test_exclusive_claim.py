@@ -202,6 +202,121 @@ class ExclusiveClaimTests(unittest.TestCase):
         self.assertEqual(second.sim_id, "haunted-sim")
         self.assertNotEqual(second.session_id, first.session_id)
 
+    def test_dead_pid_claim_is_NOT_reaped_while_device_in_use(self) -> None:
+        """A dead claimant whose device is still driven by another process survives.
+
+        This is the incident that motivated the guard: an agent runs
+        `zsh -c 'simemu claim ios && xcodebuild ...'`. The wrapper shell is the
+        recorded claimant and exits immediately, so the claim reads dead — while
+        xcodebuild keeps testing against that UDID for minutes. Reaping here
+        frees the device for a sibling claim and produces a double-claim.
+        """
+        udid = "16D8CDC7-48AB-4AA2-A87F-C117AD696549"
+        sessions = {
+            "s-32cc55": {
+                "status": "active",
+                "pid": 2_147_000_000,  # dead
+                "sim_id": udid,
+            }
+        }
+        busy = [
+            f"/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test "
+            f"-project Vivii.xcodeproj -scheme Vivii -destination id={udid}",
+            "/sbin/launchd",
+        ]
+        self.assertEqual(exclusive.collect_stale_session_ids(sessions, busy), [])
+
+    def test_dead_pid_claim_IS_reaped_when_device_idle(self) -> None:
+        """Same dead claimant, but nothing references the UDID → reap as before."""
+        udid = "16D8CDC7-48AB-4AA2-A87F-C117AD696549"
+        sessions = {
+            "s-32cc55": {
+                "status": "active",
+                "pid": 2_147_000_000,  # dead
+                "sim_id": udid,
+            }
+        }
+        idle = ["/sbin/launchd", "/usr/libexec/logd"]
+        self.assertEqual(
+            exclusive.collect_stale_session_ids(sessions, idle), ["s-32cc55"]
+        )
+
+    def test_live_claimant_is_never_reaped_even_when_device_idle(self) -> None:
+        """A live claimant is untouched regardless of device activity."""
+        sessions = {
+            "s-live": {"status": "active", "pid": os.getpid(), "sim_id": "some-udid"}
+        }
+        self.assertEqual(exclusive.collect_stale_session_ids(sessions, []), [])
+
+    def test_terminal_sessions_are_skipped(self) -> None:
+        """Already-expired/released sessions are never re-reaped."""
+        sessions = {
+            "s-gone": {
+                "status": "expired",
+                "pid": 2_147_000_000,
+                "sim_id": "dead-udid",
+            },
+            "s-freed": {
+                "status": "released",
+                "pid": 2_147_000_000,
+                "sim_id": "dead-udid",
+            },
+        }
+        self.assertEqual(exclusive.collect_stale_session_ids(sessions, []), [])
+
+    def test_session_without_pid_is_not_reaped_on_pid_grounds(self) -> None:
+        """Legacy rows with no pid fall through to heartbeat/expiry logic."""
+        sessions = {"s-legacy": {"status": "active", "sim_id": "some-udid"}}
+        self.assertEqual(exclusive.collect_stale_session_ids(sessions, []), [])
+
+    def test_device_in_use_matching(self) -> None:
+        """device_in_use is a plain substring probe, erring toward 'in use'."""
+        udid = "D02DA210-2836-4E4B-B76D-0DB868465103"
+        self.assertTrue(exclusive.device_in_use(udid, [f"xcodebuild -destination id={udid}"]))
+        self.assertFalse(exclusive.device_in_use(udid, ["xcodebuild -destination id=OTHER"]))
+        self.assertFalse(exclusive.device_in_use(udid, []))
+        # No sim_id recorded → cannot be in use.
+        self.assertFalse(exclusive.device_in_use(None, [f"anything {udid}"]))
+        self.assertFalse(exclusive.device_in_use("", [f"anything {udid}"]))
+
+    def test_only_the_idle_device_is_reaped_when_both_claimants_are_dead(self) -> None:
+        """Two dead claimants, one busy device: exactly one is reaped."""
+        busy_udid = "AAAAAAAA-0000-0000-0000-000000000001"
+        idle_udid = "BBBBBBBB-0000-0000-0000-000000000002"
+        sessions = {
+            "s-busy": {"status": "active", "pid": 2_147_000_000, "sim_id": busy_udid},
+            "s-idle": {"status": "active", "pid": 2_147_000_000, "sim_id": idle_udid},
+        }
+        lines = [f"xcodebuild test -destination id={busy_udid}"]
+        self.assertEqual(
+            exclusive.collect_stale_session_ids(sessions, lines), ["s-idle"]
+        )
+
+    def test_probe_is_not_run_when_there_are_no_dead_claimants(self) -> None:
+        """No candidates → the process table is never probed."""
+        sessions = {
+            "s-live": {"status": "active", "pid": os.getpid(), "sim_id": "some-udid"}
+        }
+        with patch(
+            "simemu.exclusive.running_process_command_lines",
+            side_effect=AssertionError("probe must not run"),
+        ):
+            self.assertEqual(exclusive.collect_stale_session_ids(sessions), [])
+
+    def test_probe_failure_does_not_block_reaping(self) -> None:
+        """If the ps probe fails it returns [] — a dead claim still gets reaped."""
+        sessions = {
+            "s-dead": {"status": "active", "pid": 2_147_000_000, "sim_id": "some-udid"}
+        }
+        with patch("simemu.exclusive.running_process_command_lines", return_value=[]):
+            self.assertEqual(exclusive.collect_stale_session_ids(sessions), ["s-dead"])
+
+    def test_running_process_command_lines_returns_real_lines(self) -> None:
+        """The default probe actually reads the process table."""
+        lines = exclusive.running_process_command_lines()
+        self.assertIsInstance(lines, list)
+        self.assertTrue(any("launchd" in line for line in lines))
+
     def test_claim_token_round_trip(self) -> None:
         """to_agent_json exposes the token; validate_token() round-trips."""
         token = exclusive.issue_claim_token()

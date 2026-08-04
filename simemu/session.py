@@ -960,13 +960,18 @@ def _session_log(message: str) -> None:
 # ── public API ───────────────────────────────────────────────────────────────
 
 def _reap_dead_claims_locked(data: dict) -> list[str]:
-    """Mark sessions whose claimant PID is dead as expired. Returns reaped IDs."""
+    """Mark reapable sessions as expired. Returns reaped IDs.
+
+    A session is reapable only when its claimant PID is dead AND no running
+    process still references its device — a dead claimant with a live
+    `xcodebuild` on its UDID is left alone.
+    """
     stale = exclusive.collect_stale_session_ids(data.get("sessions", {}))
     if stale:
         exclusive.mark_sessions_reaped(data, stale, _now_iso())
         for sid in stale:
             _session_log(
-                f"[simemu-session] Reaped session '{sid}' — claimant PID dead"
+                f"[simemu-session] Reaped session '{sid}' — claimant PID dead, device idle"
             )
     return stale
 

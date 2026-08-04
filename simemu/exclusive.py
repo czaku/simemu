@@ -6,8 +6,11 @@ session at a time. The session store (`sessions.json`) is already protected by
 `fcntl.flock` — this module adds two pieces on top:
 
 1. Liveness tracking: each session records the PID and process-group of the
-   claimant. A claim whose owner process is no longer alive is "stale" and
-   may be reaped by the next claim attempt.
+   claimant. A claim whose owner process is no longer alive is a *candidate*
+   for reaping by the next claim attempt — but a dead claimant alone is NOT
+   sufficient. The device must also be idle (no running process references
+   its UDID); see `device_in_use`. Reaping on PID death alone frees devices
+   that are still under active `xcodebuild` test runs.
 
 2. Token-based ownership: each session is issued a `claim_token` (opaque
    secret). Callers that want to enforce strict ownership (sub-agent spawning
@@ -82,15 +85,69 @@ def is_pid_alive(pid: int | None) -> bool:
     return True
 
 
-def collect_stale_session_ids(sessions: dict) -> list[str]:
-    """Return session_ids whose claim PID is no longer alive.
+def running_process_command_lines() -> list[str]:
+    """Return the command line of every running process.
+
+    Isolated behind its own function so `collect_stale_session_ids` stays
+    testable without a real simulator: tests inject the lines directly.
+    Any failure to probe returns an empty list, which is the SAFE direction
+    for the caller — see `device_in_use`.
+    """
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["ps", "-Ao", "command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return completed.stdout.splitlines()
+
+
+def device_in_use(sim_id: str | None, command_lines: Iterable[str]) -> bool:
+    """True when any running process references this device UDID.
+
+    A claim's PID is the SHELL that ran `simemu claim` (see `claimant_pid`).
+    That shell is frequently short-lived — an agent running
+    `zsh -c 'simemu claim ios && xcodebuild ...'` exits the wrapper while
+    `xcodebuild -destination id=<udid>` keeps driving the device for minutes
+    afterwards. PID liveness therefore says nothing about whether the DEVICE
+    is free, and reaping on it alone frees a device out from under live work,
+    re-opening it for a sibling claim — the double-claim this module exists
+    to prevent.
+
+    Matching is a plain substring test on the UDID. That deliberately errs
+    toward "in use": an unrelated process merely mentioning the UDID blocks a
+    reap. Refusing to free a device is recoverable; double-claiming one is not.
+    """
+    if not sim_id:
+        return False
+    return any(sim_id in line for line in command_lines)
+
+
+def collect_stale_session_ids(
+    sessions: dict,
+    command_lines: Iterable[str] | None = None,
+) -> list[str]:
+    """Return session_ids whose claim PID is dead AND whose device is idle.
 
     Only considers sessions in non-terminal status (active/idle/parked). Sessions
     without a recorded `pid` (legacy entries created before this field existed)
     are NOT considered stale on PID grounds alone — they fall back to the
     existing heartbeat/expiry logic in session.py.
+
+    A dead claimant is necessary but NOT sufficient to reap. The device must
+    also be idle: no running process may reference its `sim_id`. Pass
+    `command_lines` to inject the process table (tests); when omitted it is
+    probed once via `running_process_command_lines`.
     """
     stale: list[str] = []
+    candidates: list[tuple[str, dict]] = []
+
     for sid, raw in sessions.items():
         if raw.get("status") in ("expired", "released"):
             continue
@@ -98,7 +155,21 @@ def collect_stale_session_ids(sessions: dict) -> list[str]:
         if pid is None:
             continue
         if not is_pid_alive(pid):
-            stale.append(sid)
+            candidates.append((sid, raw))
+
+    if not candidates:
+        return stale
+
+    # Probe the process table at most once, and only when there is something
+    # to protect.
+    lines = list(
+        command_lines if command_lines is not None else running_process_command_lines()
+    )
+
+    for sid, raw in candidates:
+        if device_in_use(raw.get("sim_id"), lines):
+            continue
+        stale.append(sid)
     return stale
 
 
