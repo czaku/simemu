@@ -1,0 +1,17 @@
+T-LU-054 — Guard claim reaping with device-in-use check
+Gate: codex (plain profile), read-only, independent
+Diff reviewed: git diff origin/main...HEAD (lane.diff verified identical)
+Suite at review time: 658 passed; test_exclusive_claim.py 16 passed
+
+FINDINGS
+1. exclusive.py:106 — ps probe failure returns [], treated as "device idle", so the
+   claim IS reaped. Reproduced by codex with PATH lacking ps. Bypasses acceptance
+   criterion 1. Test test_probe_failure_does_not_block_reaping asserts this unsafe
+   behaviour as correct. The guard fails OPEN; it must fail CLOSED.
+2. exclusive.py:165 — TOCTTOU: a process may begin referencing the UDID after the ps
+   snapshot and before session.py expires the claim.
+3. session.py:1019,1183 — a single claim() can scan the process table twice, each scan
+   under the session lock with a 10s timeout. Commit message claim of "at most once"
+   is misleading at the public-claim level.
+
+VERDICT: FAIL (T-LU-054)
