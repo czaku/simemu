@@ -85,13 +85,20 @@ def is_pid_alive(pid: int | None) -> bool:
     return True
 
 
-def running_process_command_lines() -> list[str]:
-    """Return the command line of every running process.
+def running_process_command_lines() -> list[str] | None:
+    """Return the command line of every running process, or None on probe failure.
 
     Isolated behind its own function so `collect_stale_session_ids` stays
     testable without a real simulator: tests inject the lines directly.
-    Any failure to probe returns an empty list, which is the SAFE direction
-    for the caller — see `device_in_use`.
+
+    `None` and `[]` are NOT interchangeable. `[]` means the probe ran and
+    found no processes worth reporting — legitimate, if unlikely. `None`
+    means the probe itself failed (missing `ps` on PATH, timeout, OSError)
+    and we have NO information about what is running. Collapsing that
+    distinction to `[]` previously meant a probe failure was silently read
+    as "confirmed device idle", reaping a live claim out from under an
+    active `xcodebuild` run (T-LU-054). The caller must fail CLOSED on
+    `None` — treat "unknown" as "assume in use, do not reap" — never open.
     """
     import subprocess
 
@@ -104,7 +111,7 @@ def running_process_command_lines() -> list[str]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
     return completed.stdout.splitlines()
 
 
@@ -142,8 +149,17 @@ def collect_stale_session_ids(
 
     A dead claimant is necessary but NOT sufficient to reap. The device must
     also be idle: no running process may reference its `sim_id`. Pass
-    `command_lines` to inject the process table (tests); when omitted it is
-    probed once via `running_process_command_lines`.
+    `command_lines` to inject the process table (tests) — an explicitly
+    passed `[]` means "confirmed empty", same as a successful real probe.
+    When omitted, it is probed once via `running_process_command_lines`.
+
+    If that internal probe fails (returns None — see its docstring), we do
+    NOT know whether any candidate's device is in use. Reaping under that
+    uncertainty is exactly the failure this function exists to prevent, so
+    every candidate is left alone this round and none are reported stale.
+    A probe failure is transient (missing `ps`, a timeout) and the next
+    claim attempt tries again — a device staying claimed one extra round is
+    recoverable; a double-claim is not.
     """
     stale: list[str] = []
     candidates: list[tuple[str, dict]] = []
@@ -162,9 +178,14 @@ def collect_stale_session_ids(
 
     # Probe the process table at most once, and only when there is something
     # to protect.
-    lines = list(
-        command_lines if command_lines is not None else running_process_command_lines()
-    )
+    if command_lines is not None:
+        lines: list[str] = list(command_lines)
+    else:
+        probed = running_process_command_lines()
+        if probed is None:
+            # Fail closed: unknown device state, reap nothing this round.
+            return stale
+        lines = probed
 
     for sid, raw in candidates:
         if device_in_use(raw.get("sim_id"), lines):

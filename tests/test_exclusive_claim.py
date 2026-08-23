@@ -303,19 +303,54 @@ class ExclusiveClaimTests(unittest.TestCase):
         ):
             self.assertEqual(exclusive.collect_stale_session_ids(sessions), [])
 
-    def test_probe_failure_does_not_block_reaping(self) -> None:
-        """If the ps probe fails it returns [] — a dead claim still gets reaped."""
+    def test_probe_failure_fails_closed_not_reaped(self) -> None:
+        """If the ps probe FAILS (returns None) a dead claim is NOT reaped.
+
+        T-LU-054: a probe failure previously collapsed to `[]`, which read as
+        "confirmed no process references this device" and reaped it — exactly
+        the double-claim this module exists to prevent, just triggered by a
+        transient probe error instead of a real idle device.
+        """
+        sessions = {
+            "s-dead": {"status": "active", "pid": 2_147_000_000, "sim_id": "some-udid"}
+        }
+        with patch("simemu.exclusive.running_process_command_lines", return_value=None):
+            self.assertEqual(exclusive.collect_stale_session_ids(sessions), [])
+
+    def test_probe_success_with_no_processes_still_reaps(self) -> None:
+        """A real empty probe result (success, nothing running) still reaps.
+
+        Distinguishes the fix from over-correcting: `[]` from a probe that
+        genuinely ran is not the same as `None` from a probe that failed.
+        """
         sessions = {
             "s-dead": {"status": "active", "pid": 2_147_000_000, "sim_id": "some-udid"}
         }
         with patch("simemu.exclusive.running_process_command_lines", return_value=[]):
             self.assertEqual(exclusive.collect_stale_session_ids(sessions), ["s-dead"])
 
+    def test_explicit_empty_command_lines_still_reaps(self) -> None:
+        """An explicitly-passed [] (e.g. from a caller's own successful probe)
+        is treated as confirmed-empty, not as a failure signal — only the
+        internal probe returning None means failure."""
+        sessions = {
+            "s-dead": {"status": "active", "pid": 2_147_000_000, "sim_id": "some-udid"}
+        }
+        self.assertEqual(exclusive.collect_stale_session_ids(sessions, []), ["s-dead"])
+
     def test_running_process_command_lines_returns_real_lines(self) -> None:
         """The default probe actually reads the process table."""
         lines = exclusive.running_process_command_lines()
         self.assertIsInstance(lines, list)
         self.assertTrue(any("launchd" in line for line in lines))
+
+    def test_running_process_command_lines_none_on_probe_error(self) -> None:
+        """A subprocess failure surfaces as None, not an empty list."""
+        with patch(
+            "subprocess.run",
+            side_effect=OSError("no such file or directory: ps"),
+        ):
+            self.assertIsNone(exclusive.running_process_command_lines())
 
     def test_claim_token_round_trip(self) -> None:
         """to_agent_json exposes the token; validate_token() round-trips."""
