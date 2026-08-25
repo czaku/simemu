@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T-LU-054 — Codex round-2 gate review</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    body { max-width: 920px; margin: 40px auto; padding: 0 24px; line-height: 1.55; background: Canvas; color: CanvasText; }
+    h1 { margin-bottom: 0; } .meta { color: GrayText; } .verdict { color: #d1242f; font-size: 1.4rem; font-weight: 800; }
+    section { border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 8px; padding: 16px; margin: 18px 0; }
+    code { background: color-mix(in srgb, CanvasText 10%, transparent); padding: 1px 4px; border-radius: 3px; }
+    .pass { color: #17803d; font-weight: 700; } .fail { color: #d1242f; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>T-LU-054 — Codex round-2 gate</h1>
+  <p class="meta">Independent review of <code>git diff 38731b6..HEAD</code>, commit <code>897573c</code>.</p>
+  <p class="verdict">VERDICT: FAIL</p>
+
+  <section>
+    <h2>Resolved: probe failure is fail-closed</h2>
+    <p><span class="pass">PASS.</span> <code>running_process_command_lines()</code> returns <code>None</code> on <code>OSError</code> or <code>SubprocessError</code> at <code>simemu/exclusive.py:88-115</code>. <code>collect_stale_session_ids()</code> explicitly returns no candidates when that result is <code>None</code> at <code>simemu/exclusive.py:181-188</code>; a successful empty list remains distinguishable and reaps normally.</p>
+  </section>
+
+  <section>
+    <h2>Resolved: one probe per <code>_claim_once()</code></h2>
+    <p><span class="pass">PASS.</span> The only call to <code>running_process_command_lines()</code> in the claim path is at <code>simemu/session.py:1039</code>. Its list is passed to both <code>reap_dead_claims()</code> at line 1041 and <code>_reap_dead_claims_locked()</code> at line 1208, preventing the former two-probe behaviour.</p>
+  </section>
+
+  <section>
+    <h2>Blocking: TOCTTOU remains, and the in-lock check uses an older snapshot</h2>
+    <p><span class="fail">FAIL.</span> The probe occurs before rate limiting, device discovery, possible boot/readiness work, and window setup at <code>simemu/session.py:1039</code>; the second reap happens only later inside the store lock at lines <code>1203-1208</code>. A process can start referencing the dead claimant's UDID after the snapshot yet before line 1208. The code then expires that live-use claim and permits a second claim. This is the original safety failure, not an acceptable residual risk for an exclusive allocator.</p>
+    <p>The commit message's hedge is honest that the gap is not fully closed, but its claim that reusing the early snapshot “shrinks” the window is false for the in-lock reap: it can make that snapshot stale for the whole boot/preparation interval. Correct fix needs an atomic protocol that prevents a stale process observation from authorizing expiration.</p>
+  </section>
+
+  <section>
+    <h2>Tests</h2>
+    <p><span class="pass">PASS.</span> <code>python3 -m pytest</code> completed: <code>661 passed in 58.82s</code>.</p>
+    <p><code>test_probe_failure_fails_closed_not_reaped</code> and its empty-list companions exercise the real <code>collect_stale_session_ids()</code> branches; they are not merely docstring assertions. <code>test_running_process_command_lines_none_on_probe_error</code> also verifies exception-to-<code>None</code> conversion.</p>
+    <p><span class="fail">Missing coverage.</span> No test invokes <code>_claim_once()</code> and asserts one probe, snapshot reuse at both reap sites, failure skipping both sites, or the post-snapshot process-start race. The new helper tests cannot detect a broken claim-path integration.</p>
+  </section>
+</body>
+</html>

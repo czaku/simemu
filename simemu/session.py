@@ -968,10 +968,12 @@ def _reap_dead_claims_locked(
     process still references its device — a dead claimant with a live
     `xcodebuild` on its UDID is left alone.
 
-    `command_lines`, when given, is a pre-fetched process-table snapshot to
-    reuse instead of probing again — see `_claim_once`, which probes once
-    and threads the same snapshot through both this and the earlier
-    unlocked `reap_dead_claims()` call, rather than each probing separately.
+    `command_lines` exists for TESTS to inject a process table directly.
+    Production callers leave it None so the probe happens here, fresh, at
+    the moment of the decision. Do NOT pass a snapshot captured earlier in
+    the claim path: this reap can expire a claim and release its device, so
+    authorizing that on a stale observation reopens the double-claim this
+    module exists to prevent (T-LU-054 round-2 gate).
     """
     stale = exclusive.collect_stale_session_ids(data.get("sessions", {}), command_lines)
     if stale:
@@ -986,8 +988,9 @@ def _reap_dead_claims_locked(
 def reap_dead_claims(command_lines: list[str] | None = None) -> list[str]:
     """Public: reap sessions whose claimant PID is no longer alive.
 
-    Pass `command_lines` to reuse an already-fetched process-table snapshot
-    (see `_claim_once`); omitted, this probes internally.
+    `command_lines` is for tests; production callers omit it and this probes
+    the process table itself. See `_reap_dead_claims_locked` for why a
+    snapshot is never shared across phases of a claim.
     """
     with _locked_sessions() as (data, save):
         reaped = _reap_dead_claims_locked(data, command_lines)
@@ -1025,20 +1028,14 @@ def claim(spec: ClaimSpec, wait_seconds: int = 0) -> Session:
 
 def _claim_once(spec: ClaimSpec) -> Session:
     """Single-shot claim attempt. Use claim() for the public wait-aware wrapper."""
-    # Probe the process table once per attempt and reuse the same snapshot for
-    # both reap call sites below (here, and again under the session lock further
-    # down). Previously each site probed separately (T-LU-054 finding 3) — besides
-    # the duplicate work, two probes taken moments apart can disagree, and each
-    # extra probe widens the window between "device confirmed idle" and "claim
-    # marked expired" (finding 2). One snapshot, reused, closes both gaps as far
-    # as they can be closed without a broader locking change.
-    #
-    # If the probe itself fails we get None back (see running_process_command_lines)
-    # and skip reaping entirely this attempt rather than reap under unknown device
-    # state — finding 1, fail closed.
-    reap_command_lines = exclusive.running_process_command_lines()
-    if reap_command_lines is not None:
-        reap_dead_claims(reap_command_lines)
+    # Reap any sessions whose claimant process is dead before searching, so the
+    # device pool reflects reality. This probes the process table itself, and
+    # deliberately does NOT share that snapshot with the in-lock reap further
+    # down: everything between here and there (rate limiting, device discovery,
+    # boot, readiness, window setup) can take a long time, and an expiry
+    # decision must never be authorized by a stale process observation.
+    # See _reap_dead_claims_locked for the safety-critical probe.
+    reap_dead_claims()
 
     agent = os.environ.get("SIMEMU_AGENT") or f"pid-{os.getpid()}"
     now = _now_iso()
@@ -1201,11 +1198,12 @@ def _claim_once(spec: ClaimSpec) -> Session:
 
     # Persist session — check for duplicate sim_id under lock
     with _locked_sessions() as (data, save):
-        # Reap any dead-PID claimants before evaluating contention. Reuses the
-        # single process-table snapshot taken at the top of this attempt (see
-        # there for why) rather than probing again.
-        if reap_command_lines is not None:
-            _reap_dead_claims_locked(data, reap_command_lines)
+        # Reap any dead-PID claimants before evaluating contention. Probes the
+        # process table FRESH, here, inside the lock — never reusing the earlier
+        # snapshot. This is the safety-critical reap: it is the one that can
+        # expire a claim and hand its device to the caller, so the observation
+        # authorizing that expiry must be as close to the decision as possible.
+        _reap_dead_claims_locked(data)
 
         # Check if another active session already has this device
         for existing_id, existing in list(data["sessions"].items()):

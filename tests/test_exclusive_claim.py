@@ -38,6 +38,7 @@ os.environ["SIMEMU_CONFIG_DIR"] = _tmpdir
 
 from simemu import exclusive  # noqa: E402
 from simemu.discover import NoSimulatorAvailable, SimulatorInfo  # noqa: E402
+from simemu import session as session_mod  # noqa: E402
 from simemu.session import (  # noqa: E402
     ClaimSpec,
     SessionError,
