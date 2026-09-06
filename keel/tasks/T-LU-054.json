@@ -1,7 +1,7 @@
 {
   "id": "T-LU-054",
   "title": "Guard claim reaping with device-in-use check",
-  "description": "collect_stale_session_ids() reaps a claim purely on is_pid_alive(claimant_pid). claimant_pid() binds the claim to os.getppid() — the shell that ran 'simemu claim'. When that shell is short-lived (zsh -c wrapper), the claim reads dead while the DEVICE is still in active use by a different process (xcodebuild -destination id=<udid>). _reap_dead_claims_locked then marks the session expired, freeing the device for a sibling to claim — producing the double-claim incident exclusive.py exists to prevent. Observed live: session s-32cc55 held chard (16D8CDC7) with dead claimant pid 62666 while xcodebuild ran a Vivii test against that same UDID.",
+  "description": "collect_stale_session_ids() reaps a claim purely on is_pid_alive(claimant_pid). claimant_pid() binds the claim to os.getppid() \u2014 the shell that ran 'simemu claim'. When that shell is short-lived (zsh -c wrapper), the claim reads dead while the DEVICE is still in active use by a different process (xcodebuild -destination id=<udid>). _reap_dead_claims_locked then marks the session expired, freeing the device for a sibling to claim \u2014 producing the double-claim incident exclusive.py exists to prevent. Observed live: session s-32cc55 held chard (16D8CDC7) with dead claimant pid 62666 while xcodebuild ran a Vivii test against that same UDID.\n\nSee also: T-054 (symptom-level report of the same PID-liveness reaping issue, filed independently) and T-056 (v2 sessions have no on-demand release verb at all -- same claim-lifecycle subsystem).",
   "product": null,
   "lane": null,
   "wave": "v2 Polish",

@@ -9,136 +9,139 @@
 
 ### Core
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-001 | Build wrapper: simemu do $SESSION build --variant | done | high | — | — | all | — |
-| T-035 | Permanent device reservations per product — sitches-ios, fitkind-ios slug-based allocation | done | medium | — | — | all | — |
-| T-036 | Integrate Scouty desktop lease API for multi-tool focus management | done | medium | — | — | all | T-033, T-034 |
-| T-037 | pip publish simemu package and install.sh improvements | done | medium | — | — | all | — |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-001 | Build wrapper: simemu do $SESSION build --variant | — | done | high | — | — | all | — |
+| T-035 | Permanent device reservations per product — sitches-ios, fitkind-ios slug-based allocation | — | done | medium | — | — | all | — |
+| T-036 | Integrate Scouty desktop lease API for multi-tool focus management | — | done | medium | — | — | all | T-033, T-034 |
+| T-037 | pip publish simemu package and install.sh improvements | — | done | medium | — | — | all | — |
 
 ### Unassigned
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-034 | Shared-desktop reliability — brief focus acquisition, user app restoration after interactions | done | high | — | — | all | — |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-034 | Shared-desktop reliability — brief focus acquisition, user app restoration after interactions | — | done | high | — | — | all | — |
 
 ## Wave 2: Proof Reliability
 
 
 ### Core
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-LU-008 | Live visibility reconciliation — derive visible/headless from actual simulator/emulator window state | done | high | — | — | all | — |
-| T-LU-011 | Proof mode command — normalize appearance/status bar/render waits and capture an artifact bundle | done | high | — | — | all | T-LU-008, T-LU-014, T-LU-017, T-LU-019 |
-| T-LU-014 | iOS URL handoff hardening — avoid sticky Open in app confirmation sheets and emit diagnostics | done | high | — | — | ios | — |
-| T-LU-017 | Android launch/url verification in server and CLI surfaces — reject proof when another app is foreground | done | high | — | — | android | — |
-| T-LU-019 | Session provenance — persist launched app, deep link, artifact path, and proof metadata per command | done | medium | — | — | all | — |
-| T-LU-020 | Menubar live refresh — watch sessions.json changes instead of polling | done | medium | — | — | all | T-LU-008 |
-| T-LU-021 | Server v2 parity for present, stabilize, verify-install, and repair-install | done | medium | — | — | all | T-LU-014, T-LU-017 |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-LU-008 | Live visibility reconciliation — derive visible/headless from actual simulator/emulator window state | — | done | high | — | — | all | — |
+| T-LU-011 | Proof mode command — normalize appearance/status bar/render waits and capture an artifact bundle | — | done | high | — | — | all | T-LU-008, T-LU-014, T-LU-017, T-LU-019 |
+| T-LU-014 | iOS URL handoff hardening — avoid sticky Open in app confirmation sheets and emit diagnostics | — | done | high | — | — | ios | — |
+| T-LU-017 | Android launch/url verification in server and CLI surfaces — reject proof when another app is foreground | — | done | high | — | — | android | — |
+| T-LU-019 | Session provenance — persist launched app, deep link, artifact path, and proof metadata per command | — | done | medium | — | — | all | — |
+| T-LU-020 | Menubar live refresh — watch sessions.json changes instead of polling | — | done | medium | — | — | all | T-LU-008 |
+| T-LU-021 | Server v2 parity for present, stabilize, verify-install, and repair-install | — | done | medium | — | — | all | T-LU-014, T-LU-017 |
 
 ## Wave 3: Productization
 
 
 ### Core
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-LU-003 | Permanent reservation pools per product and form factor with config-backed policy | done | high | — | — | all | — |
-| T-LU-005 | Claim policy config file — aliases, defaults, and per-product device preferences | done | medium | — | — | all | — |
-| T-LU-007 | CLI shell completions and command-surface polish | done | medium | — | — | all | — |
-| T-LU-010 | Package publishing — pipx and PyPI distribution with reproducible release flow | done | medium | — | — | all | — |
-| T-LU-013 | Installer hardening — repair PATH, wrapper, monitor, and menu bar installation | done | medium | — | — | all | — |
-| T-LU-016 | Runecode/doctor integration — detect broken simemu setup and suggest fixes | done | medium | — | — | all | — |
-| T-LU-018 | Project integration kit — canonical keel/execution.yaml and simemu snippets for downstream repos | done | low | — | — | all | — |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-LU-003 | Permanent reservation pools per product and form factor with config-backed policy | — | done | high | — | — | all | — |
+| T-LU-005 | Claim policy config file — aliases, defaults, and per-product device preferences | — | done | medium | — | — | all | — |
+| T-LU-007 | CLI shell completions and command-surface polish | — | done | medium | — | — | all | — |
+| T-LU-010 | Package publishing — pipx and PyPI distribution with reproducible release flow | — | done | medium | — | — | all | — |
+| T-LU-013 | Installer hardening — repair PATH, wrapper, monitor, and menu bar installation | — | done | medium | — | — | all | — |
+| T-LU-016 | Runecode/doctor integration — detect broken simemu setup and suggest fixes | — | done | medium | — | — | all | — |
+| T-LU-018 | Project integration kit — canonical keel/execution.yaml and simemu snippets for downstream repos | — | done | low | — | — | all | — |
 
 ### Unassigned
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-LU-035 | Menubar device management — relabel and rename devices from UI | done | medium | — | — | all | — |
-| T-LU-036 | Device aliases and renaming — persistent labels for real devices and simulators | done | high | — | — | all | — |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-LU-035 | Menubar device management — relabel and rename devices from UI | — | done | medium | — | — | all | — |
+| T-LU-036 | Device aliases and renaming — persistent labels for real devices and simulators | — | done | high | — | — | all | — |
 
 ## Wave 4: Ops Hardening
 
 
 ### Core
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-LU-001 | Session store schema versioning and migrations | done | high | — | — | all | — |
-| T-LU-002 | Crash-safe atomic writes and corruption recovery for sessions.json and history logs | done | high | — | — | all | — |
-| T-LU-004 | Monitor and menu bar watchdog — detect dead daemons and guide recovery | done | medium | — | — | all | — |
-| T-LU-006 | Structured trace bundle export for transcript-backed debugging | done | medium | — | — | all | — |
-| T-LU-009 | Real-device parity — claim/do/recovery coverage for iPhone and Android hardware | done | medium | — | — | all | — |
-| T-LU-012 | Server auth and rate limiting for multi-user deployments | done | medium | — | — | all | — |
-| T-LU-015 | JSON schema contract for sessions, commands, and server responses | done | medium | — | — | all | — |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-LU-001 | Session store schema versioning and migrations | — | done | high | — | — | all | — |
+| T-LU-002 | Crash-safe atomic writes and corruption recovery for sessions.json and history logs | — | done | high | — | — | all | — |
+| T-LU-004 | Monitor and menu bar watchdog — detect dead daemons and guide recovery | — | done | medium | — | — | all | — |
+| T-LU-006 | Structured trace bundle export for transcript-backed debugging | — | done | medium | — | — | all | — |
+| T-LU-009 | Real-device parity — claim/do/recovery coverage for iPhone and Android hardware | — | done | medium | — | — | all | — |
+| T-LU-012 | Server auth and rate limiting for multi-user deployments | — | done | medium | — | — | all | — |
+| T-LU-015 | JSON schema contract for sessions, commands, and server responses | — | done | medium | — | — | all | — |
 
 ### Unassigned
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-LU-034 | Real iOS parity — stable identifiers, discovery, and screenshot path | done | high | — | — | all | — |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-LU-034 | Real iOS parity — stable identifiers, discovery, and screenshot path | — | done | high | — | — | all | — |
 
 ## Wave 5: Zero Tolerance
 
 
 ### Unassigned
 
-| ID | Title | Status | Priority | Product | Lane | Platform | Depends On |
-|----|-------|--------|----------|---------|------|----------|------------|
-| T-LU-022 | [BUG] Fix 2 Android launch tests that timeout at 60s — unmocked time.sleep in stop_other_apps | done | critical | — | — | — | — |
-| T-LU-023 | [BUG] Fix iOS boot tolerance test (test_boot_tolerates_already_booted_error) — mock IndexError | done | critical | — | — | — | — |
-| T-LU-024 | [BUG] Fix misplaced docstrings in 7+ functions across android.py and ios.py — docstring after first statement is dead code | done | high | — | — | — | — |
-| T-LU-025 | [BUG] Add missing subprocess timeout to boot() getprop call and get_screen_size() wm size call in android.py | done | high | — | — | — | — |
-| T-LU-026 | [BUG] reboot() does not wait for Android device after adb reboot — serial becomes invalid | done | high | — | — | — | — |
-| T-LU-027 | [BUG] Hardcoded target=android-35 in AVD rename() — should preserve original ini target | done | medium | — | — | — | — |
-| T-LU-028 | [BUG] Hardcoded /tmp/simemu-apps in macOS command handler — should use _sidecar_dir pattern | done | medium | — | — | — | — |
-| T-LU-029 | [BUG] _dumpsys_has_real_package operator precedence unclear — add explicit parentheses | done | low | — | — | — | — |
-| T-LU-030 | [BUG] Dead pass statement in foreground_app line 374 | done | low | — | — | — | — |
-| T-LU-031 | [GATE] All tests pass with zero failures and zero timeouts — pytest exits 0 | done | critical | — | — | — | — |
-| T-LU-032 | [GATE] Zero subprocess.run calls without timeout in android.py — grep verification | done | high | — | — | — | — |
-| T-LU-033 | [GATE] All docstrings are first statement in function body — grep verification | done | medium | — | — | — | — |
+| ID | Title | Parent | Status | Priority | Product | Lane | Platform | Depends On |
+|----|-------|--------|--------|----------|---------|------|----------|------------|
+| T-LU-022 | [BUG] Fix 2 Android launch tests that timeout at 60s — unmocked time.sleep in stop_other_apps | — | done | critical | — | — | — | — |
+| T-LU-023 | [BUG] Fix iOS boot tolerance test (test_boot_tolerates_already_booted_error) — mock IndexError | — | done | critical | — | — | — | — |
+| T-LU-024 | [BUG] Fix misplaced docstrings in 7+ functions across android.py and ios.py — docstring after first statement is dead code | — | done | high | — | — | — | — |
+| T-LU-025 | [BUG] Add missing subprocess timeout to boot() getprop call and get_screen_size() wm size call in android.py | — | done | high | — | — | — | — |
+| T-LU-026 | [BUG] reboot() does not wait for Android device after adb reboot — serial becomes invalid | — | done | high | — | — | — | — |
+| T-LU-027 | [BUG] Hardcoded target=android-35 in AVD rename() — should preserve original ini target | — | done | medium | — | — | — | — |
+| T-LU-028 | [BUG] Hardcoded /tmp/simemu-apps in macOS command handler — should use _sidecar_dir pattern | — | done | medium | — | — | — | — |
+| T-LU-029 | [BUG] _dumpsys_has_real_package operator precedence unclear — add explicit parentheses | — | done | low | — | — | — | — |
+| T-LU-030 | [BUG] Dead pass statement in foreground_app line 374 | — | done | low | — | — | — | — |
+| T-LU-031 | [GATE] All tests pass with zero failures and zero timeouts — pytest exits 0 | — | done | critical | — | — | — | — |
+| T-LU-032 | [GATE] Zero subprocess.run calls without timeout in android.py — grep verification | — | done | high | — | — | — | — |
+| T-LU-033 | [GATE] All docstrings are first statement in function body — grep verification | — | done | medium | — | — | — | — |
 
 ## Unassigned
 
-| ID | Title | Status | Priority | Product | Lane |
-|----|-------|--------|----------|---------|------|
-| T-002 | Fix menubar panel scroll clipping — header/footer cut off | done | high | — | — |
-| T-003 | Add headless/visible indicator per session tile | done | high | — | — |
-| T-004 | Click tile to focus/show simulator window | done | high | — | — |
-| T-005 | Fix project name — show project not pid-XXXXX | done | medium | — | — |
-| T-006 | Deemphasize session ID, project name as bold header | done | medium | — | — |
-| T-007 | Fix menu bar pk label — show sleep icon when all parked | done | low | — | — |
-| T-008 | Add Hide All / Show All buttons to panel footer | done | medium | — | — |
-| T-009 | Add per-tile context menu: focus, hide, park, release | done | low | — | — |
-| T-010 | Read actual memory from monitor instead of estimate | done | low | — | — |
-| T-011 | Remove dead legacy command handler code from cli.py | done | medium | — | — |
-| T-012 | Add simemu do help command — list all 50+ commands with descriptions | done | high | — | — |
-| T-013 | Rewrite test_cli.py for v2 commands (claim, do, sessions, config) | done | high | — | — |
-| T-014 | Session recovery after reboot — detect stale sessions on monitor startup | done | high | — | — |
-| T-015 | Command history — log every do command to session record | done | high | — | — |
-| T-016 | Update AGENT_README.md with all new commands and --show/--hide | done | high | — | — |
-| T-017 | Update README.md — remove legacy sections, add complete v2 docs | done | high | — | — |
-| T-018 | Add simemu do help with categorized command reference | done | high | — | — |
-| T-019 | Test server v2 endpoints — /v2/claim, /v2/do, /v2/sessions | done | medium | — | — |
-| T-020 | Add macOS platform support — claim macos, screenshot, launch | done | medium | — | — |
-| T-021 | Auto-cleanup expired sessions from sessions.json | done | medium | — | — |
-| T-022 | Document and test the build command | done | medium | — | — |
-| T-023 | Create install.sh that sets up monitor + menubar + guard hook | done | medium | — | — |
-| T-024 | Add simemu status — system health overview | done | medium | — | — |
-| T-025 | Add --max-size to do screenshot for auto-resize | done | high | — | — |
-| T-026 | Add progress feedback to claim — print booting status to stderr | done | medium | — | — |
-| T-027 | Promote a11y-tap as primary interaction method in docs | done | medium | — | — |
-| T-028 | Add monitor health watchdog — detect if cron stopped | done | low | — | — |
-| T-029 | Fix android get_serial None checks in all new commands | done | high | — | — |
-| T-030 | Verify crash_log and clear_data function signatures | done | high | — | — |
-| T-031 | Add session claim rate limiting — max 5 active per agent | done | low | — | — |
-| T-032 | Menubar app macOS 26 compatibility — fix SwiftUI rendering issues on macOS 26 | done | high | — | — |
-| T-033 | Desktop lease coordination — simemu present command for canonical window placement and focus management | done | high | — | — |
-| T-LU-048 | privacy: Maintainer's home path + username hardcoded in SHIPPING source: simemu/device.py:300 sets _PYMOBILEDEVICE… | todo | high | — | launch-readiness |
-| T-LU-049 | privacy: Private/internal product names (goala, sitches, fitkind, univiirse, vivii, up2much, StrikeThePose, settle… | todo | high | — | launch-readiness |
-| T-LU-050 | privacy: tests/test_docs_regression.py:30-35 hardcodes absolute paths to the maintainer's private projects: /Users… | todo | medium | — | launch-readiness |
-| T-LU-051 | supply-chain: Makefile ships `publish:` and `publish-test:` targets that run `python3 -m twine upload dist/*` to P… | todo | medium | — | launch-readiness |
-| T-LU-052 | Add smoke E2E test — verify simemu monitor starts and claim returns a session ID | todo | high | — | launch-readiness |
-| T-LU-053 | Tag and push v0.x release — first public OSS release of simemu | todo | medium | — | launch-readiness |
+| ID | Title | Parent | Status | Priority | Product | Lane |
+|----|-------|--------|--------|----------|---------|------|
+| T-002 | Fix menubar panel scroll clipping — header/footer cut off | — | done | high | — | — |
+| T-003 | Add headless/visible indicator per session tile | — | done | high | — | — |
+| T-004 | Click tile to focus/show simulator window | — | done | high | — | — |
+| T-005 | Fix project name — show project not pid-XXXXX | — | done | medium | — | — |
+| T-006 | Deemphasize session ID, project name as bold header | — | done | medium | — | — |
+| T-007 | Fix menu bar pk label — show sleep icon when all parked | — | done | low | — | — |
+| T-008 | Add Hide All / Show All buttons to panel footer | — | done | medium | — | — |
+| T-009 | Add per-tile context menu: focus, hide, park, release | — | done | low | — | — |
+| T-010 | Read actual memory from monitor instead of estimate | — | done | low | — | — |
+| T-011 | Remove dead legacy command handler code from cli.py | — | done | medium | — | — |
+| T-012 | Add simemu do help command — list all 50+ commands with descriptions | — | done | high | — | — |
+| T-013 | Rewrite test_cli.py for v2 commands (claim, do, sessions, config) | — | done | high | — | — |
+| T-014 | Session recovery after reboot — detect stale sessions on monitor startup | — | done | high | — | — |
+| T-015 | Command history — log every do command to session record | — | done | high | — | — |
+| T-016 | Update AGENT_README.md with all new commands and --show/--hide | — | done | high | — | — |
+| T-017 | Update README.md — remove legacy sections, add complete v2 docs | — | done | high | — | — |
+| T-018 | Add simemu do help with categorized command reference | — | done | high | — | — |
+| T-019 | Test server v2 endpoints — /v2/claim, /v2/do, /v2/sessions | — | done | medium | — | — |
+| T-020 | Add macOS platform support — claim macos, screenshot, launch | — | done | medium | — | — |
+| T-021 | Auto-cleanup expired sessions from sessions.json | — | done | medium | — | — |
+| T-022 | Document and test the build command | — | done | medium | — | — |
+| T-023 | Create install.sh that sets up monitor + menubar + guard hook | — | done | medium | — | — |
+| T-024 | Add simemu status — system health overview | — | done | medium | — | — |
+| T-025 | Add --max-size to do screenshot for auto-resize | — | done | high | — | — |
+| T-026 | Add progress feedback to claim — print booting status to stderr | — | done | medium | — | — |
+| T-027 | Promote a11y-tap as primary interaction method in docs | — | done | medium | — | — |
+| T-028 | Add monitor health watchdog — detect if cron stopped | — | done | low | — | — |
+| T-029 | Fix android get_serial None checks in all new commands | — | done | high | — | — |
+| T-030 | Verify crash_log and clear_data function signatures | — | done | high | — | — |
+| T-031 | Add session claim rate limiting — max 5 active per agent | — | done | low | — | — |
+| T-032 | Menubar app macOS 26 compatibility — fix SwiftUI rendering issues on macOS 26 | — | done | high | — | — |
+| T-033 | Desktop lease coordination — simemu present command for canonical window placement and focus management | — | done | high | — | — |
+| T-054 | v2 session idle timeout is too aggressive for a build-and-test cycle, silently hands device to another claimant | — | todo | high | — | — |
+| T-056 | v2 sessions have no release/do-based release path — leaked claims can only be waited out, not freed | — | todo | high | — | — |
+| T-LU-048 | privacy: Maintainer's home path + username hardcoded in SHIPPING source: simemu/device.py:300 sets _PYMOBILEDEVICE… | — | todo | high | — | launch-readiness |
+| T-LU-049 | privacy: Private/internal product names (goala, sitches, fitkind, univiirse, vivii, up2much, StrikeThePose, settle… | — | todo | high | — | launch-readiness |
+| T-LU-050 | privacy: tests/test_docs_regression.py:30-35 hardcodes absolute paths to the maintainer's private projects: /Users… | — | todo | medium | — | launch-readiness |
+| T-LU-051 | supply-chain: Makefile ships `publish:` and `publish-test:` targets that run `python3 -m twine upload dist/*` to P… | — | todo | medium | — | launch-readiness |
+| T-LU-052 | Add smoke E2E test — verify simemu monitor starts and claim returns a session ID | — | todo | high | — | launch-readiness |
+| T-LU-053 | Tag and push v0.x release — first public OSS release of simemu | — | todo | medium | — | launch-readiness |
+| T-LU-055 | Fix _sim_window_match for newer Xcode window-title format (en dash, no parens) | — | todo | medium | — | — |
