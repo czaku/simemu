@@ -1,0 +1,40 @@
+{
+  "id": "T-055",
+  "title": "Claim idle timeout is too aggressive — lapses mid build-and-test and hands the device to another agent",
+  "description": "Observed 2026-09-06 on mac-studio with several agents sharing devices. simemu's claim idle timeout is roughly 30-60s, far shorter than a build-and-test cycle. A lane claimed a device, ran xcodebuild, and by the time it took a screenshot the claim had lapsed and another agent's FitKind run held the device — so it captured the wrong app in the foreground and correctly distrusted its own evidence. Two problems: (1) the timeout is measured against simemu interactions rather than the claim holder still being alive, so a long build looks idle; (2) a lapse is silent — nothing tells the holder it lost the device, and raw simctl calls then land on someone else's session. A claim should survive as long as its holder lives, and losing one should be loud.",
+  "product": null,
+  "lane": null,
+  "wave": null,
+  "space": null,
+  "status": "todo",
+  "priority": "high",
+  "platform": null,
+  "assignee": null,
+  "dependsOn": [],
+  "spec": null,
+  "parentId": null,
+  "dueDate": null,
+  "context": [],
+  "acceptanceCriteria": [],
+  "statusHistory": [
+    {
+      "status": "todo",
+      "ts": "2026-09-06T20:25:29.230Z"
+    }
+  ],
+  "attachments": [],
+  "stage": null,
+  "runStatus": null,
+  "stageHistory": [],
+  "recurring": null,
+  "createdAt": "2026-09-06T20:25:29.002Z",
+  "updatedAt": "2026-09-06T20:25:29.002Z",
+  "proofReferences": [],
+  "proofOverrides": [],
+  "surfaces": [],
+  "parityPair": null,
+  "validationOverrides": null,
+  "executionMode": null,
+  "taskGraph": null,
+  "runtime": null
+}
