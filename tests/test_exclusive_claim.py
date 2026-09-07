@@ -474,6 +474,12 @@ class OneShotShellDetectionTests(unittest.TestCase):
     def test_empty_command_is_not_one_shot(self) -> None:
         self.assertFalse(exclusive._looks_like_one_shot_shell(""))
 
+    def test_script_with_c_argument_is_not_one_shot(self) -> None:
+        """A script's OWN '-c' argument must not be mistaken for the shell's
+        own -c flag: 'bash build.sh -c' is a durable script run (build.sh is
+        the first positional argument), not a one-shot -c invocation."""
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash build.sh -c"))
+
 
 class DurableAncestorTests(unittest.TestCase):
     """Unit tests for exclusive._find_durable_ancestor and claimant_pid().
@@ -489,45 +495,63 @@ class DurableAncestorTests(unittest.TestCase):
     def test_walks_past_single_one_shot_wrapper(self) -> None:
         # pid 100 (immediate parent) is a one-shot wrapper whose own parent,
         # pid 50, is the durable harness process.
-        commands = {100: "/bin/zsh -c simemu claim ios", 50: "/usr/bin/claude"}
-        parents = {100: 50}
-        with patch("simemu.exclusive._process_command", side_effect=lambda pid: commands.get(pid)), \
-             patch("simemu.exclusive._parent_pid", side_effect=lambda pid: parents.get(pid)):
+        table = {
+            100: (50, "/bin/zsh -c simemu claim ios"),
+            50: (5, "/usr/bin/claude"),
+        }
+        with patch("simemu.exclusive._ppid_and_command",
+                    side_effect=lambda pid: table.get(pid, (None, None))):
             self.assertEqual(exclusive._find_durable_ancestor(100), 50)
 
     def test_walks_past_chained_one_shot_wrappers(self) -> None:
         # 300 -c-> 200 -c-> 100, then 100's parent (10) is durable.
-        commands = {
-            300: "/bin/zsh -c inner",
-            200: "/bin/bash -c middle",
-            100: "/bin/sh -c outer",
-            10: "/usr/bin/sweech",
+        table = {
+            300: (200, "/bin/zsh -c inner"),
+            200: (100, "/bin/bash -c middle"),
+            100: (10, "/bin/sh -c outer"),
+            10: (1, "/usr/bin/sweech"),
         }
-        parents = {300: 200, 200: 100, 100: 10}
-        with patch("simemu.exclusive._process_command", side_effect=lambda pid: commands.get(pid)), \
-             patch("simemu.exclusive._parent_pid", side_effect=lambda pid: parents.get(pid)):
+        with patch("simemu.exclusive._ppid_and_command",
+                    side_effect=lambda pid: table.get(pid, (None, None))):
             self.assertEqual(exclusive._find_durable_ancestor(300), 10)
 
     def test_stops_immediately_for_non_wrapper_parent(self) -> None:
         """Interactive terminal / already-durable parent: unchanged behavior."""
-        with patch("simemu.exclusive._process_command", return_value="-zsh"):
+        with patch("simemu.exclusive._ppid_and_command", return_value=(1, "-zsh")):
             self.assertEqual(exclusive._find_durable_ancestor(777), 777)
 
     def test_falls_back_to_start_pid_when_ps_unavailable(self) -> None:
-        """`ps` failing must reproduce the pre-existing (already-shipped)
-        behavior exactly — never worse, never a crash."""
-        with patch("simemu.exclusive._process_command", return_value=None):
+        """`ps` failing on the FIRST probe must reproduce the pre-existing
+        (already-shipped) behavior exactly — never worse, never a crash."""
+        with patch("simemu.exclusive._ppid_and_command", return_value=(None, None)):
             self.assertEqual(exclusive._find_durable_ancestor(4242), 4242)
+
+    def test_falls_back_to_start_pid_when_probe_fails_mid_walk(self) -> None:
+        """Gate finding on the original implementation: a probe failure
+        PARTWAY through the walk (not on the first hop) must not be silently
+        trusted as a durable ancestor. pid 100 is a confirmed one-shot
+        wrapper whose parent is 50, but 50's own probe fails (e.g. it exited
+        in the gap between reading its ppid and reading its command) — the
+        walk must fall all the way back to start_pid (100), never return the
+        unverified 50, since an unverified pid could itself be transient and
+        reproduce the exact premature-reap bug this walk exists to prevent.
+        """
+        table = {100: (50, "/bin/zsh -c simemu claim ios")}
+        with patch("simemu.exclusive._ppid_and_command",
+                    side_effect=lambda pid: table.get(pid, (None, None))):
+            self.assertEqual(exclusive._find_durable_ancestor(100), 100)
 
     def test_bounded_hop_count_never_loops_forever(self) -> None:
         # A pathological chain longer than _MAX_ANCESTOR_HOPS must still
-        # terminate, landing on whatever it reached at the hop limit.
-        commands = {pid: f"/bin/zsh -c step{pid}" for pid in range(1, 30)}
-        parents = {pid: pid + 1 for pid in range(1, 30)}
-        with patch("simemu.exclusive._process_command", side_effect=lambda pid: commands.get(pid)), \
-             patch("simemu.exclusive._parent_pid", side_effect=lambda pid: parents.get(pid)):
+        # terminate. Every hop along the way is a CONFIRMED one-shot wrapper
+        # (never an unverified probe failure), so hitting the hop limit
+        # without ever confirming a durable ancestor falls back to start_pid
+        # rather than trusting the last (unverified-as-durable) hop reached.
+        table = {pid: (pid + 1, f"/bin/zsh -c step{pid}") for pid in range(1, 30)}
+        with patch("simemu.exclusive._ppid_and_command",
+                    side_effect=lambda pid: table.get(pid, (None, None))):
             result = exclusive._find_durable_ancestor(1)
-        self.assertEqual(result, 1 + exclusive._MAX_ANCESTOR_HOPS)
+        self.assertEqual(result, 1)
 
     def test_claimant_pid_env_override_wins_over_ancestor_walk(self) -> None:
         with patch.dict(os.environ, {"SIMEMU_CLAIMANT_PID": "555"}):

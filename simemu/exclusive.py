@@ -39,41 +39,39 @@ _MAX_ANCESTOR_HOPS = 8
 _ONE_SHOT_SHELL_NAMES = frozenset({"zsh", "bash", "sh", "dash", "ksh"})
 
 
-def _ps_field(pid: int, keyword: str) -> str | None:
-    """Return one `ps` output field for `pid`, or None if it can't be read.
+def _ppid_and_command(pid: int) -> tuple[int | None, str | None]:
+    """Read `pid`'s parent PID and full command line from a SINGLE `ps` call.
 
-    Failure (process gone, permission denied, `ps` missing) is not
-    distinguished from "no useful answer" — every caller here treats None as
-    "stop walking, use what we already have," which is always at least as
-    safe as the pre-existing single-PID behavior.
+    Two separate `ps` invocations (one for ppid, one for command) leave a
+    TOCTOU window between them in which `pid` could exit and its slot get
+    reused by an unrelated process before the second call runs, making the
+    two fields describe two different processes. One call over both fields
+    is an atomic kernel snapshot — it either describes one real process or
+    fails outright; it cannot describe two.
     """
     try:
         result = subprocess.run(
-            ["ps", "-o", f"{keyword}=", "-p", str(pid)],
+            ["ps", "-o", "ppid=,command=", "-p", str(pid)],
             capture_output=True, text=True, timeout=2,
         )
     except (OSError, subprocess.SubprocessError):
-        return None
+        return None, None
     if result.returncode != 0:
-        return None
-    value = result.stdout.strip()
-    return value or None
-
-
-def _parent_pid(pid: int) -> int | None:
-    raw = _ps_field(pid, "ppid")
-    if raw is None:
-        return None
+        return None, None
+    line = result.stdout.strip("\n")
+    if not line.strip():
+        return None, None
+    # Leading field is PPID (no internal spaces); command is everything after
+    # the first run of whitespace, however many spaces/args it contains.
+    parts = line.strip().split(None, 1)
+    if not parts:
+        return None, None
     try:
-        value = int(raw)
+        ppid = int(parts[0])
     except ValueError:
-        return None
-    return value if value > 1 else None
-
-
-def _process_command(pid: int) -> str | None:
-    """Return the full command line (argv, space-joined) for `pid`."""
-    return _ps_field(pid, "command")
+        return None, None
+    command = parts[1] if len(parts) > 1 else ""
+    return (ppid if ppid > 1 else None), (command or None)
 
 
 def _looks_like_one_shot_shell(command_line: str) -> bool:
@@ -81,10 +79,16 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
 
     Matches `zsh -c '...'`, `/bin/bash -lc "..."`, `sh -c ...`, etc. — any
     invocation of a known shell with a `-c`-style flag (including combined
-    flags like `-lc`). Long-form options (`--foo`) are ignored since none of
-    these shells use `--command`. An interactive or login shell with no `-c`
-    flag (a human's terminal, a persistent script shell) never matches, so
-    behavior for those callers is unchanged.
+    flags like `-lc`), PROVIDED that flag appears before the first positional
+    argument. Long-form options (`--foo`) are ignored since none of these
+    shells use `--command`, and scanning continues past them. Scanning STOPS
+    at the first positional (non-flag) token, since everything after that is
+    an argument to a script/command, not a flag to the shell itself — without
+    this, `bash build.sh -c` (a durable script run, whose OWN arg happens to
+    be `-c`) would be misread as a one-shot `-c` invocation of bash itself.
+    An interactive or login shell with no `-c` flag (a human's terminal, a
+    persistent script shell) never matches, so behavior for those callers is
+    unchanged.
     """
     tokens = command_line.split()
     if not tokens:
@@ -93,9 +97,12 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
     if exe not in _ONE_SHOT_SHELL_NAMES:
         return False
     for tok in tokens[1:]:
-        if not tok.startswith("-") or tok.startswith("--"):
-            continue
-        if tok == "-":
+        if tok == "-" or not tok.startswith("-"):
+            # A bare "-" (read stdin) or a plain positional argument (a
+            # script path, or the first word of what -c already matched) —
+            # nothing past this point is a flag to the shell itself.
+            break
+        if tok.startswith("--"):
             continue
         if "c" in tok[1:]:
             return True
@@ -109,20 +116,29 @@ def _find_durable_ancestor(start_pid: int) -> int:
     wrapper — in practice, the agent's own persistent CLI/harness process, an
     orchestrator, or an interactive shell — which is a much closer proxy for
     "is the holder of this claim still around" than the immediate parent.
-    Falls back to `start_pid` the moment `ps` can't answer, which reproduces
-    the pre-existing (already-shipped) behavior exactly — this never makes
-    liveness tracking less safe than it was before, only less trigger-happy.
+
+    Only ever returns a pid whose command line this function itself actually
+    read and confirmed durable in THIS same hop, or `start_pid` (the pre-
+    existing, already-shipped behavior). It never returns an unverified
+    intermediate ancestor: if a probe fails, or the hop limit is reached,
+    mid-walk — before a durable (non-one-shot) pid has been confirmed — the
+    walk gives up and falls back to `start_pid` rather than guessing that
+    whatever pid it last reached is safe. Guessing there was the bug: an
+    unverified ancestor could itself be a transient wrapper that exits
+    moments later, reproducing the exact premature-reap/double-claim failure
+    this walk exists to prevent.
     """
     pid = start_pid
     for _ in range(_MAX_ANCESTOR_HOPS):
-        command = _process_command(pid)
-        if command is None or not _looks_like_one_shot_shell(command):
+        parent, command = _ppid_and_command(pid)
+        if command is None:
+            return start_pid
+        if not _looks_like_one_shot_shell(command):
             return pid
-        parent = _parent_pid(pid)
         if parent is None or parent == pid:
-            return pid
+            return start_pid
         pid = parent
-    return pid
+    return start_pid
 
 
 def claimant_pid() -> int:
