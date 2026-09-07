@@ -561,6 +561,19 @@ class OneShotShellDetectionTests(unittest.TestCase):
         self.assertTrue(exclusive._looks_like_one_shot_shell("bash +O extglob -c cmd"))
         self.assertFalse(exclusive._looks_like_one_shot_shell("bash -O"))
 
+    def test_operand_flag_combined_in_a_short_option_cluster(self) -> None:
+        """bash/zsh/ksh combine short flags into one token ('-eo' == '-e -o'
+        both applied). When an operand-taking flag (o/O) appears WITHIN such
+        a cluster, everything after it in that token -- or the whole next
+        token if nothing follows -- is its operand, not more flags or the
+        first positional argument. A real -c later in the invocation must
+        still be found."""
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash -eo errexit -c cmd"))
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash -oerrexit -c cmd"))
+        # 'o' appearing before 'c' in the SAME cluster consumes 'c' as part
+        # of its operand -- this does NOT mean "-o combined with -c".
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash -oc"))
+
     def test_end_of_options_marker_stops_flag_scanning(self) -> None:
         """A bare '--' is the POSIX end-of-options marker: bash treats a
         literal '-c' after it as a positional filename, not the -c flag."""
