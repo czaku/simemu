@@ -545,6 +545,22 @@ class OneShotShellDetectionTests(unittest.TestCase):
         self.assertTrue(exclusive._looks_like_one_shot_shell("bash +o errexit -c cmd"))
         self.assertFalse(exclusive._looks_like_one_shot_shell("bash +o"))
 
+    def test_plus_prefixed_toggle_flags_are_not_mistaken_for_positional(self) -> None:
+        """bash/zsh/ksh accept '+X' as the toggle-OFF form of any '-X'
+        single-letter option (e.g. '+e' disables errexit) -- these are
+        flags, not positional arguments, even though they don't start with
+        '-'. A real -c later in the same invocation must still be found."""
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash +e -c 'simemu claim ios; true'"))
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash +eu -c cmd"))
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash +x build.sh"))
+
+    def test_capital_o_option_operand_is_not_mistaken_for_positional(self) -> None:
+        """'-O'/'+O' (bash shopt option) also takes an operand, same as
+        '-o'/'+o'."""
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash -O extglob -c cmd"))
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash +O extglob -c cmd"))
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash -O"))
+
     def test_end_of_options_marker_stops_flag_scanning(self) -> None:
         """A bare '--' is the POSIX end-of-options marker: bash treats a
         literal '-c' after it as a positional filename, not the -c flag."""

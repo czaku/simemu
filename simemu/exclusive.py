@@ -38,6 +38,10 @@ from typing import Iterable
 # times within the same minute. See _find_durable_ancestor() below.
 _MAX_ANCESTOR_HOPS = 8
 _ONE_SHOT_SHELL_NAMES = frozenset({"zsh", "bash", "sh", "dash", "ksh"})
+# Shell flags that consume a following operand (the option name) rather than
+# being self-contained — that operand must be skipped, not mistaken for the
+# first positional argument, by _looks_like_one_shot_shell.
+_OPTIONS_WITH_OPERAND = frozenset({"-o", "+o", "-O", "+O"})
 
 
 _PS_RETRY_ATTEMPTS = 3
@@ -103,17 +107,22 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
     but a BARE `--` is the POSIX end-of-options marker: bash/zsh/ksh treat
     anything after it as a positional argument (a script/file name), so a
     literal `-c` appearing after `--` is that filename, not the flag, and
-    scanning stops there. `-o`/`+o` (set a named shell option, e.g. `-o
-    errexit`) take a following operand that is NOT itself a flag — it's
-    skipped rather than treated as the first positional argument, so a real
-    `-c` later in the same invocation (e.g. `bash -o errexit -c '...'`) is
-    still found. Scanning otherwise STOPS at the first positional (non-flag)
-    token, since everything after that is an argument to a script/command,
-    not a flag to the shell itself — without this, `bash build.sh -c` (a
-    durable script run, whose OWN arg happens to be `-c`) would be misread as
-    a one-shot `-c` invocation of bash itself. An interactive or login shell
-    with no `-c` flag (a human's terminal, a persistent script shell) never
-    matches, so behavior for those callers is unchanged.
+    scanning stops there. bash/zsh/ksh also accept `+X` as the toggle-OFF
+    form of any `-X` single-letter option (e.g. `+e` disables errexit, the
+    mirror of `-e`) — these are flags too, just like their `-X` counterparts,
+    not positional arguments, even though they don't start with `-`. `-o`/
+    `+o`/`-O`/`+O` (set a named shell/shopt option, e.g. `-o errexit`) take a
+    following operand that is NOT itself a flag — it's skipped rather than
+    treated as the first positional argument, so a real `-c` later in the
+    same invocation (e.g. `bash -o errexit -c '...'` or `bash +e -c '...'`)
+    is still found. Scanning otherwise STOPS at the first genuine positional
+    argument (a token starting with neither `-` nor `+`), since everything
+    after that is an argument to a script/command, not a flag to the shell
+    itself — without this, `bash build.sh -c` (a durable script run, whose
+    OWN arg happens to be `-c`) would be misread as a one-shot `-c`
+    invocation of bash itself. An interactive or login shell with no `-c`
+    flag (a human's terminal, a persistent script shell) never matches, so
+    behavior for those callers is unchanged.
     """
     tokens = command_line.split()
     if not tokens:
@@ -128,20 +137,20 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
         if tok == "--":
             # End-of-options marker — nothing after this is a shell flag.
             break
-        if tok in ("-o", "+o"):
-            # Takes a following operand (e.g. "errexit") that is itself not
-            # a flag — skip it rather than treating it as the first
-            # positional argument. Checked BEFORE the bare-"-"/positional
-            # test below, since "+o" itself does not start with "-" and
-            # would otherwise be misread as a positional argument.
+        if tok in _OPTIONS_WITH_OPERAND:
+            # Takes a following operand (e.g. "-o errexit") that is itself
+            # not a flag — skip it rather than treating it as the first
+            # positional argument.
             i += 2
             continue
-        if tok == "-" or not tok.startswith("-"):
+        if tok == "-" or not (tok.startswith("-") or tok.startswith("+")):
             # A bare "-" (read stdin) or a plain positional argument (a
             # script path, or the first word of what -c already matched) —
             # nothing past this point is a flag to the shell itself.
             break
-        if not tok.startswith("--") and "c" in tok[1:]:
+        if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
+            # Only the "-"-prefixed form carries -c ("run this command and
+            # exit") — there is no "+c" equivalent in any of these shells.
             return True
         i += 1
     return False
