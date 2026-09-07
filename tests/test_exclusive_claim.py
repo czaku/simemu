@@ -583,6 +583,17 @@ class OneShotShellDetectionTests(unittest.TestCase):
         self.assertTrue(exclusive._looks_like_one_shot_shell("bash --restricted -c cmd"))
         self.assertTrue(exclusive._looks_like_one_shot_shell("bash --login -c cmd"))
 
+    def test_rcfile_and_init_file_operand_is_not_mistaken_for_positional(self) -> None:
+        """Unlike other long options, bash's --rcfile/--init-file take a
+        following filename operand -- it must be skipped, not read as the
+        first positional argument, so a real -c later on is still found."""
+        self.assertTrue(exclusive._looks_like_one_shot_shell(
+            "bash --rcfile /tmp/bashrc -c 'simemu claim ios; true'"
+        ))
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash --init-file /tmp/f -c cmd"))
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash --rcfile"))
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash --rcfile /tmp/bashrc"))
+
     def test_end_of_options_marker_stops_flag_scanning(self) -> None:
         """A bare '--' is the POSIX end-of-options marker: bash treats a
         literal '-c' after it as a positional filename, not the -c flag."""

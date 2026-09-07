@@ -123,8 +123,10 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
     never scanned character by character (a `c` appearing anywhere in its
     name, e.g. "--res-c-tricted", is not the `-c` flag). None of these
     shells' long options are `--command`, so a bare long option never
-    matches on its own; scanning continues to the next token. A BARE `--` is
-    the
+    matches on its own; scanning continues to the next token. Bash's
+    `--rcfile`/`--init-file` are the one exception: they take a following
+    filename operand, which is skipped too rather than read as the first
+    positional argument. A BARE `--` is the
     POSIX end-of-options marker: bash/zsh/ksh treat anything after it as a
     positional argument (a script/file name), so a literal `-c` appearing
     after `--` is that filename, not the flag, and scanning stops there.
@@ -160,9 +162,12 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
             # named flag, not a cluster of short-option characters — it must
             # NOT be scanned character-by-character (a 'c' anywhere in its
             # name, e.g. "--res-c-tricted", is not the -c flag). None of
-            # these shells' long options are "--command", so it's just
-            # skipped with no operand and no match.
-            i += 1
+            # these shells' long options are "--command", so a bare one is
+            # just skipped with no match. Bash's --rcfile/--init-file are
+            # the exception: they take a following filename operand that
+            # must be skipped too, not read as a positional argument or
+            # scanned for -c.
+            i += 2 if tok in ("--rcfile", "--init-file") else 1
             continue
         is_dash = tok.startswith("-")
         body = tok[1:]
