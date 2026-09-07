@@ -12,6 +12,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -708,7 +709,25 @@ def cmd_acquire(args):
     _reject_legacy(args)
 
 
+# v2 session ids are always "s-" + 6 lowercase hex chars (see
+# session._gen_session_id). Anything matching this shape typed at the
+# legacy `simemu release <slug>` command is unambiguously a v2 session,
+# never a real v1 slug — route it to the real release path instead of
+# bouncing it off the discontinued-legacy error, which is the exact
+# "release does not exist for v2" dead end reported in T-056.
+_V2_SESSION_ID_RE = re.compile(r"^s-[0-9a-f]{6}$")
+
+
 def cmd_release(args):
+    slug = getattr(args, "slug", None)
+    if slug and _V2_SESSION_ID_RE.match(slug):
+        try:
+            session = session_module.release(slug)
+        except SessionError as e:
+            _print_json(e.to_json())
+            sys.exit(1)
+        _print_json({"session": session.session_id, "status": "released"})
+        return
     _reject_legacy(args)
 
 
@@ -2149,8 +2168,8 @@ def build_parser() -> argparse.ArgumentParser:
     do_p.add_argument("session", help="Session ID (e.g. s-a7f3b2)")
     do_p.add_argument("do_command",
                       help="Command: build, install, launch, tap, swipe, screenshot, maestro, "
-                           "url, done, renew, env, terminate, uninstall, input, long-press, "
-                           "key, appearance, rotate, location, push, pull, add-media, "
+                           "url, done (alias: release), renew, env, terminate, uninstall, input, "
+                           "long-press, key, appearance, rotate, location, push, pull, add-media, "
                            "shake, status-bar, software-keyboard")
     do_p.add_argument("extra", nargs=argparse.REMAINDER,
                       help="Arguments for the command")
@@ -2262,9 +2281,11 @@ def build_parser() -> argparse.ArgumentParser:
     acq.add_argument("--json", action="store_true", help="Output as JSON")
     acq.set_defaults(func=cmd_acquire)
 
-    # release
-    rel = sub.add_parser("release", help="Release a reserved simulator")
-    rel.add_argument("slug")
+    # release — v1 slug reservations are discontinued; a v2 session id
+    # (s-xxxxxx) here is routed to the real v2 release path (same as
+    # `simemu do <session> done`/`release`) so the intuitive verb works.
+    rel = sub.add_parser("release", help="Release a v2 session (s-xxxxxx) or free a legacy slug")
+    rel.add_argument("slug", help="v2 session id (s-xxxxxx), or a legacy slug (discontinued)")
     rel.set_defaults(func=cmd_release)
 
     # list
@@ -2916,6 +2937,10 @@ _V2_COMMANDS = {
     "cmd_create", "cmd_idle_shutdown",
     "cmd_list", "cmd_list_devices",  # discovery is still useful
     "cmd_status_overview",  # v2 system overview
+    # cmd_release must run (not get short-circuited here) so it can tell a v2
+    # session id (s-xxxxxx) apart from a legacy slug — it makes that call
+    # itself and still rejects legacy slugs via _reject_legacy(). See T-056.
+    "cmd_release",
 }
 
 

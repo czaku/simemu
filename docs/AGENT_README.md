@@ -114,7 +114,7 @@ simemu do $SESSION reboot                       # restart simulator
 simemu do $SESSION env                          # device info (UDID, serial, OS version)
 simemu do $SESSION clone                        # clone iOS simulator
 simemu do $SESSION build                        # build app (requires keel/execution.yaml)
-simemu do $SESSION done                         # release session
+simemu do $SESSION done                         # release session (alias: release)
 ```
 
 ### Advanced
@@ -147,5 +147,13 @@ SESSION=$(simemu claim ios --version 26 --form-factor phone | jq -r .session)
 - **NEVER** manage device lifecycle (boot/shutdown) — simemu does this
 - Use `a11y-tap` for UI interaction — works headless, no coordinates needed
 - Use Maestro for complex multi-step flows
-- Sessions expire after inactivity — the error tells you what to do
-- If something breaks, re-claim — simemu handles recovery
+- A claim stays valid as long as its holder is alive, regardless of gaps between
+  `simemu do` calls (a long build in between is fine) — it is only reaped if the
+  holder process is confirmed dead, or after a very long absolute ceiling. If a
+  `do` call ever returns `session_expired`, the error tells you the real reason
+  (reaped vs. genuinely idle) and the exact re-claim command — just run it.
+- **NEVER** fall back to raw `xcrun simctl`/`adb` against a remembered UDID after
+  a claim error. The device may already belong to a different session by then —
+  any screenshot or action against it is untrustworthy evidence. Re-claim first.
+- Done with a session early? Call `simemu do $SESSION done` (or `release`) —
+  don't wait for it to time out.

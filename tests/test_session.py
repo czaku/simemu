@@ -731,6 +731,38 @@ class TestTouch(unittest.TestCase):
             touch("s-aaa111")
         self.assertEqual(ctx.exception.error_type, "session_expired")
 
+    def test_touch_raises_with_pid_dead_reason_reveals_true_cause(self) -> None:
+        """T-054/T-LU-054: a PID-reaped claim must say so, not blame inactivity.
+
+        A blanket "expired after inactivity" hint is actively misleading when
+        the real cause was a liveness reap — the holder may have been working
+        the entire time. The error must carry the real reason so an agent
+        doesn't misdiagnose it as having been idle too long.
+        """
+        self._seed_session(status="expired", reaped_reason="claimant_pid_dead")
+        with self.assertRaises(SessionError) as ctx:
+            touch("s-aaa111")
+        self.assertEqual(ctx.exception.error_type, "session_expired")
+        j = ctx.exception.to_json()
+        self.assertEqual(j["reaped_reason"], "claimant_pid_dead")
+        self.assertIn("not due to inactivity", j["hint"])
+
+    def test_touch_raises_with_idle_timeout_reason_by_default(self) -> None:
+        """A session that crosses the terminal idle ceiling gets the generic
+        inactivity hint and is persisted with reaped_reason=idle_timeout —
+        distinct from a PID-death reap even though both end in session_expired.
+        """
+        stale_heartbeat = (datetime.now(timezone.utc) - timedelta(seconds=EXPIRE_TIMEOUT + 5)).isoformat()
+        self._seed_session(heartbeat_at=stale_heartbeat, expires_at=stale_heartbeat)
+        with self.assertRaises(SessionError) as ctx:
+            touch("s-aaa111")
+        j = ctx.exception.to_json()
+        self.assertEqual(j["reaped_reason"], "idle_timeout")
+        self.assertIn("inactivity", j["hint"])
+        self.assertNotIn("not due to inactivity", j["hint"])
+        raw = json.loads((Path(self.tmpdir.name) / "sessions.json").read_text())
+        self.assertEqual(raw["sessions"]["s-aaa111"]["reaped_reason"], "idle_timeout")
+
     def test_touch_raises_for_nonexistent_session(self) -> None:
         with self.assertRaises(SessionError) as ctx:
             touch("s-doesnt-exist")
@@ -1329,6 +1361,17 @@ class TestDoCommand(unittest.TestCase):
         self.assertEqual(result["status"], "released")
         session = get_session("s-aaa111")
         self.assertEqual(session.status, "released")
+
+    @patch("simemu.session.android.get_android_serial", return_value="emulator-5554")
+    def test_do_command_release_alias_releases(self, mock_serial) -> None:
+        """T-056: 'release' is the discoverable verb name — same effect as 'done'."""
+        self._seed_session()
+        result = do_command("s-aaa111", "release", [])
+        self.assertEqual(result["status"], "released")
+        session = get_session("s-aaa111")
+        self.assertEqual(session.status, "released")
+        # No extra claim-call reaper needed to make the release visible.
+        self.assertNotIn("s-aaa111", get_active_sessions())
 
     @patch("simemu.session.android.get_android_serial", return_value="emulator-5554")
     def test_do_command_boot_touches(self, mock_serial) -> None:

@@ -23,11 +23,13 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 import os
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -202,6 +204,97 @@ class ExclusiveClaimTests(unittest.TestCase):
         self.assertEqual(second.sim_id, "haunted-sim")
         self.assertNotEqual(second.session_id, first.session_id)
 
+    @patch("simemu.session.window_mgr.apply_window_mode")
+    @patch("simemu.session.ios.boot")
+    @patch("simemu.session.state.check_maintenance")
+    def test_claim_survives_multi_minute_gap_with_live_pid(self, mock_maint, mock_boot, mock_win) -> None:
+        """T-054: a live holder keeps its claim no matter how long since its
+        last call — the exact 'long xcodebuild with no simemu interaction'
+        situation a claim exists to protect. Only PID death should ever
+        trigger a reap; idle time alone must not.
+        """
+        pool = _DevicePool([_make_sim("build-sim")])
+        with patch("simemu.session.find_best_device", side_effect=pool):
+            first = claim(ClaimSpec(platform="ios"))
+
+        sf = Path(self.tmpdir.name) / "sessions.json"
+        data = json.loads(sf.read_text())
+        # Bind to OUR OWN pid — genuinely alive for the life of this test —
+        # and backdate heartbeat_at by several minutes with no `do` calls in
+        # between, simulating a long build the agent never touched simemu
+        # during.
+        data["sessions"][first.session_id]["pid"] = os.getpid()
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        data["sessions"][first.session_id]["heartbeat_at"] = stale
+        sf.write_text(json.dumps(data))
+
+        self.assertEqual(reap_dead_claims(), [], "a live-PID claim must never be reaped by idle time alone")
+        self.assertIn(first.session_id, get_active_sessions())
+
+    @patch("simemu.session.window_mgr.apply_window_mode")
+    @patch("simemu.session.ios.boot")
+    @patch("simemu.session.state.check_maintenance")
+    def test_claim_held_by_killed_process_is_reapable_immediately(self, mock_maint, mock_boot, mock_win) -> None:
+        """T-054/T-LU-054: once the real holder process is confirmed dead,
+        the claim is reapable on the very next check — no grace period, no
+        waiting for an unrelated future claim() to happen to notice."""
+        pool = _DevicePool([_make_sim("victim-sim")])
+        with patch("simemu.session.find_best_device", side_effect=pool):
+            first = claim(ClaimSpec(platform="ios"))
+
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            sf = Path(self.tmpdir.name) / "sessions.json"
+            data = json.loads(sf.read_text())
+            data["sessions"][first.session_id]["pid"] = child.pid
+            sf.write_text(json.dumps(data))
+
+            # Alive: not reaped.
+            self.assertEqual(reap_dead_claims(), [])
+
+            # Kill it and wait for the kernel to actually reap the zombie —
+            # is_pid_alive() must see it as gone right away, no polling loop.
+            child.kill()
+            child.wait(timeout=10)
+            reaped = reap_dead_claims()
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=10)
+
+        self.assertIn(first.session_id, reaped)
+        self.assertNotIn(first.session_id, get_active_sessions())
+
+        # The device is immediately claimable again — no unrelated call needed.
+        with patch("simemu.session.find_best_device", side_effect=pool):
+            second = claim(ClaimSpec(platform="ios"))
+        self.assertEqual(second.sim_id, "victim-sim")
+
+    @patch("simemu.session.window_mgr.apply_window_mode")
+    @patch("simemu.session.ios.erase")
+    @patch("simemu.session.ios.shutdown")
+    @patch("simemu.session.ios.boot")
+    @patch("simemu.session.state.check_maintenance")
+    def test_release_frees_device_without_needing_reap_call(
+        self, mock_maint, mock_boot, mock_shutdown, mock_erase, mock_win
+    ) -> None:
+        """T-056: an explicit release must free the device immediately —
+        visible to `simemu claims`/`sessions` right away, with no dependency
+        on the PID-liveness reaper or another unrelated claim() call."""
+        pool = _DevicePool([_make_sim("giveback-sim")])
+        with patch("simemu.session.find_best_device", side_effect=pool):
+            first = claim(ClaimSpec(platform="ios"))
+        self.assertIn(first.session_id, get_active_sessions())
+
+        released = release(first.session_id)
+        self.assertEqual(released.status, "released")
+        self.assertNotIn(first.session_id, get_active_sessions())
+
+        with patch("simemu.session.find_best_device", side_effect=pool):
+            second = claim(ClaimSpec(platform="ios"))
+        self.assertEqual(second.sim_id, "giveback-sim")
+        self.assertNotEqual(second.session_id, first.session_id)
+
     def test_claim_token_round_trip(self) -> None:
         """to_agent_json exposes the token; validate_token() round-trips."""
         token = exclusive.issue_claim_token()
@@ -252,8 +345,73 @@ def _child_claim(state_dir: str, sim_ids: list[str], result_q) -> None:
             result_q.put(("err", repr(exc), "", os.getpid()))
 
 
+def _child_claim_no_wait(state_dir: str, sim_id: str, result_q) -> None:
+    """Subprocess entry: N processes race for ONE device, no --wait.
+
+    Exactly one must win; everyone else must fail fast and cleanly rather
+    than hang, crash, or silently succeed against the same device.
+    """
+    os.environ["SIMEMU_STATE_DIR"] = state_dir
+    os.environ["SIMEMU_CONFIG_DIR"] = state_dir
+    from simemu.discover import SimulatorInfo as _Sim
+    from simemu import session as _sess
+
+    sim = _Sim(sim_id=sim_id, platform="ios", device_name=sim_id, booted=True,
+               runtime="iOS 26.2", real_device=False)
+
+    def _pick(spec):
+        from simemu.session import get_active_sessions as _gas
+        if any(s.sim_id == sim_id for s in _gas().values()):
+            from simemu.discover import NoSimulatorAvailable as _Nope
+            raise _Nope("pool exhausted")
+        return sim
+
+    with patch.object(_sess, "find_best_device", side_effect=_pick), \
+         patch.object(_sess.ios, "boot"), \
+         patch.object(_sess.window_mgr, "apply_window_mode"), \
+         patch.object(_sess.state, "check_maintenance"):
+        try:
+            s = _sess.claim(_sess.ClaimSpec(platform="ios"), wait_seconds=0)
+            result_q.put(("ok", s.sim_id, s.session_id, os.getpid()))
+        except Exception as exc:
+            error_type = getattr(exc, "error_type", type(exc).__name__)
+            result_q.put(("err", error_type, "", os.getpid()))
+
+
 class ExclusiveClaimMultiprocessTests(unittest.TestCase):
     """Cross-process flock contention — 4 child processes, 6 devices."""
+
+    def test_concurrent_subprocess_claims_on_single_device_only_one_wins(self) -> None:
+        """T-054/T-LU-054 verification: a second claimant cannot act on a
+        device while the first holds it, and gets a clear error — proven
+        under REAL cross-process concurrency, not sequential mocked calls."""
+        ctx = mp.get_context("spawn")
+        with tempfile.TemporaryDirectory(prefix="simemu-excl-mp-single-") as td:
+            q = ctx.Queue()
+            procs = [
+                ctx.Process(target=_child_claim_no_wait, args=(td, "solo-mp-sim", q))
+                for _ in range(5)
+            ]
+            for p in procs:
+                p.start()
+            for p in procs:
+                p.join(timeout=60)
+                self.assertEqual(p.exitcode, 0, f"child exited {p.exitcode}")
+
+            results = []
+            while not q.empty():
+                results.append(q.get_nowait())
+
+            oks = [r for r in results if r[0] == "ok"]
+            errs = [r for r in results if r[0] == "err"]
+            self.assertEqual(len(results), 5, f"expected 5 results, got {len(results)}: {results}")
+            self.assertEqual(len(oks), 1, f"expected exactly 1 winner, got {len(oks)}: {results}")
+            self.assertEqual(len(errs), 4, f"expected 4 clear losers, got {len(errs)}: {results}")
+            for _, error_type, _, _ in errs:
+                self.assertIn(
+                    error_type, ("device_already_claimed", "NoSimulatorAvailable"),
+                    f"unclear/unexpected error on the losing side: {error_type}",
+                )
 
     def test_concurrent_subprocess_claims_get_distinct_udids(self) -> None:
         # Use 'spawn' so children don't inherit the unittest temp-dir env.
@@ -287,6 +445,101 @@ class ExclusiveClaimMultiprocessTests(unittest.TestCase):
                 f"DOUBLE CLAIM across processes: {sim_ids_claimed}",
             )
             self.assertEqual(len(set(session_ids)), 4)
+
+
+class OneShotShellDetectionTests(unittest.TestCase):
+    """Unit tests for exclusive._looks_like_one_shot_shell."""
+
+    def test_zsh_dash_c_is_one_shot(self) -> None:
+        self.assertTrue(exclusive._looks_like_one_shot_shell("/bin/zsh -c echo hi"))
+
+    def test_bash_dash_c_is_one_shot(self) -> None:
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash -c 'echo hi'"))
+
+    def test_combined_login_command_flag_is_one_shot(self) -> None:
+        self.assertTrue(exclusive._looks_like_one_shot_shell("/bin/zsh -lc 'echo hi'"))
+
+    def test_sh_dash_c_is_one_shot(self) -> None:
+        self.assertTrue(exclusive._looks_like_one_shot_shell("/bin/sh -c 'echo hi'"))
+
+    def test_interactive_shell_is_not_one_shot(self) -> None:
+        self.assertFalse(exclusive._looks_like_one_shot_shell("-zsh"))
+        self.assertFalse(exclusive._looks_like_one_shot_shell("/bin/zsh"))
+
+    def test_non_shell_command_is_not_one_shot(self) -> None:
+        self.assertFalse(exclusive._looks_like_one_shot_shell(
+            "/Users/luke/.local/bin/claude --dangerously-skip-permissions"
+        ))
+
+    def test_empty_command_is_not_one_shot(self) -> None:
+        self.assertFalse(exclusive._looks_like_one_shot_shell(""))
+
+
+class DurableAncestorTests(unittest.TestCase):
+    """Unit tests for exclusive._find_durable_ancestor and claimant_pid().
+
+    T-LU-054's root-cause finding: each simemu invocation is typically run by
+    a fresh `<shell> -c "simemu ..."` wrapper that exits the instant that one
+    command returns, so os.getppid() is a near-useless liveness anchor — it's
+    already gone before the agent's next call. These tests exercise the
+    ancestor walk that skips past that wrapper to find the process that
+    actually persists across calls.
+    """
+
+    def test_walks_past_single_one_shot_wrapper(self) -> None:
+        # pid 100 (immediate parent) is a one-shot wrapper whose own parent,
+        # pid 50, is the durable harness process.
+        commands = {100: "/bin/zsh -c simemu claim ios", 50: "/usr/bin/claude"}
+        parents = {100: 50}
+        with patch("simemu.exclusive._process_command", side_effect=lambda pid: commands.get(pid)), \
+             patch("simemu.exclusive._parent_pid", side_effect=lambda pid: parents.get(pid)):
+            self.assertEqual(exclusive._find_durable_ancestor(100), 50)
+
+    def test_walks_past_chained_one_shot_wrappers(self) -> None:
+        # 300 -c-> 200 -c-> 100, then 100's parent (10) is durable.
+        commands = {
+            300: "/bin/zsh -c inner",
+            200: "/bin/bash -c middle",
+            100: "/bin/sh -c outer",
+            10: "/usr/bin/sweech",
+        }
+        parents = {300: 200, 200: 100, 100: 10}
+        with patch("simemu.exclusive._process_command", side_effect=lambda pid: commands.get(pid)), \
+             patch("simemu.exclusive._parent_pid", side_effect=lambda pid: parents.get(pid)):
+            self.assertEqual(exclusive._find_durable_ancestor(300), 10)
+
+    def test_stops_immediately_for_non_wrapper_parent(self) -> None:
+        """Interactive terminal / already-durable parent: unchanged behavior."""
+        with patch("simemu.exclusive._process_command", return_value="-zsh"):
+            self.assertEqual(exclusive._find_durable_ancestor(777), 777)
+
+    def test_falls_back_to_start_pid_when_ps_unavailable(self) -> None:
+        """`ps` failing must reproduce the pre-existing (already-shipped)
+        behavior exactly — never worse, never a crash."""
+        with patch("simemu.exclusive._process_command", return_value=None):
+            self.assertEqual(exclusive._find_durable_ancestor(4242), 4242)
+
+    def test_bounded_hop_count_never_loops_forever(self) -> None:
+        # A pathological chain longer than _MAX_ANCESTOR_HOPS must still
+        # terminate, landing on whatever it reached at the hop limit.
+        commands = {pid: f"/bin/zsh -c step{pid}" for pid in range(1, 30)}
+        parents = {pid: pid + 1 for pid in range(1, 30)}
+        with patch("simemu.exclusive._process_command", side_effect=lambda pid: commands.get(pid)), \
+             patch("simemu.exclusive._parent_pid", side_effect=lambda pid: parents.get(pid)):
+            result = exclusive._find_durable_ancestor(1)
+        self.assertEqual(result, 1 + exclusive._MAX_ANCESTOR_HOPS)
+
+    def test_claimant_pid_env_override_wins_over_ancestor_walk(self) -> None:
+        with patch.dict(os.environ, {"SIMEMU_CLAIMANT_PID": "555"}):
+            self.assertEqual(exclusive.claimant_pid(), 555)
+
+    def test_claimant_pid_uses_durable_ancestor_of_getppid(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SIMEMU_CLAIMANT_PID", None)
+            with patch("os.getppid", return_value=100), \
+                 patch("simemu.exclusive._find_durable_ancestor", return_value=50) as mock_walk:
+                self.assertEqual(exclusive.claimant_pid(), 50)
+            mock_walk.assert_called_once_with(100)
 
 
 if __name__ == "__main__":
