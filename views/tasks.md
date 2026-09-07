@@ -146,3 +146,4 @@
 | T-LU-052 | Add smoke E2E test — verify simemu monitor starts and claim returns a session ID | — | todo | high | — | launch-readiness |
 | T-LU-053 | Tag and push v0.x release — first public OSS release of simemu | — | todo | medium | — | launch-readiness |
 | T-LU-055 | Fix _sim_window_match for newer Xcode window-title format (en dash, no parens) | — | todo | medium | — | — |
+| T-LU-056 | iOS session input (tap/swipe/scroll) reports success without effect — sometimes lost, sometimes delivered minutes late | — | todo | high | — | — |

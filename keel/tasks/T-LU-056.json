@@ -1,0 +1,56 @@
+{
+  "id": "T-LU-056",
+  "title": "iOS session input (tap/swipe/scroll) reports success without effect — sometimes lost, sometimes delivered minutes late",
+  "description": "Two related, reproducible failures in simemu's iOS HID input path, found across two separate investigation phases against the same device/session class (iPhone 17 simulator, iOS 26.5, session claimed via `simemu claim ios --device \"iPhone 17\"`).\n\n1. `simemu do <session> scroll down` (and raw `swipe`) reports `{\"status\": \"scrolled\"}` / `{\"status\": \"tapped\", ...}` every time, but the on-screen content does not move. Reproduced 7+ times in one phase (varied coordinates, durations 200ms-1500ms, and the dedicated `scroll` subcommand) against a confirmed genuinely-scrollable ScrollView (padded past one screen with throwaway tmux session fixtures, confirmed picked up by the daemon). Screenshots before/after are pixel-identical outside noise (<0.1% of pixels differ by >30, confined to the status-bar clock digits).\n\n2. In a second, later phase against a freshly-claimed session on the same device, `tap` calls that appeared to have zero effect (3 consecutive taps at correct point-coordinates on a \"Connect a machine\" button, a \"Skip\" button, and an \"X\" close button, verified via cat -n cross-check of point-vs-pixel math each time) were in fact NOT lost: one of them (a `simemu do <session> url \"demix://cockpit\"` call sent via a backgrounded shell command) surfaced as a real \"Open in <App>?\" system dialog roughly 4 minutes after being issued, mid-way through an unrelated screenshot capture for a different variant. That call had already been killed (its owning shell PID) by the time its effect appeared, so this was not simply a slow synchronous call still running — the input was queued somewhere in the CoreSimulator/HID pipeline and delivered asynchronously, long after the command that issued it had returned (and in that one case, after the issuing process was dead).\n\nBoth failures were worked around operationally rather than fixed: (1) was bypassed by building a deep-linkable SwiftUI harness (`demix-playground://mock-cockpit`) that uses `.defaultScrollAnchor` instead of a gesture, and cold `launch-with-args` instead of live navigation — sidesteps the input path entirely rather than fixing it. (2) was worked around by not sending further taps and just waiting long enough (up to ~60s) for a queued one to land, which is not a reliable interactive workflow.\n\nThis matters going forward: demix's tab bar is being replaced with a native `TabView`, and `tabBarMinimizeBehavior(.onScrollDown)` will need real, verified scroll-under-glass capture to check — exactly the capability this bug currently defeats.\n\nFiled per house rule (own the tool, fix the bug, don't route around it silently) after two separate teams hit the same class of failure and both had to build a workaround instead of getting a working scroll/tap.",
+  "product": null,
+  "lane": null,
+  "wave": null,
+  "space": null,
+  "status": "todo",
+  "priority": "high",
+  "platform": "ios",
+  "assignee": null,
+  "dependsOn": [],
+  "spec": null,
+  "parentId": null,
+  "dueDate": null,
+  "context": [
+    {
+      "at": "2026-09-07T17:20:00.000Z",
+      "by": "agent",
+      "text": "Evidence gathered while running the demix white-tint tab-bar glass experiment (lane build-a11y, session claimed as s-8559c6 on mac-studio against iPhone 17 / iOS 26.5). Screenshots and pixel-diff numbers referenced in the description are from that session's working files (not attached here — ephemeral scratch dir); the diff methodology was: numpy abs-difference between before/after PNG, count of pixels with sum-of-channel-diff > 30, and the row band with highest mean diff (confined to the status-bar clock area, confirming no real content moved). The delayed-dialog observation was caught by re-screenshotting after killing a hung background `simemu do ... url ...` call and unexpectedly seeing an \"Open in Demix?\" system alert that had not been there seconds before, roughly 4 minutes after that call was issued and after its owning shell process had already been killed."
+    }
+  ],
+  "acceptanceCriteria": [
+    "A minimal, scripted repro exists for failure #1: claim an iOS session, present a genuinely-scrollable view, issue `scroll down` (or an equivalent swipe), and assert the screenshot before/after actually differs beyond noise — this repro should currently FAIL, demonstrating the bug",
+    "The root cause is identified: is scroll/swipe delivered to the wrong window/layer, silently dropped by CoreSimulator, or is there a queuing/ordering issue that also explains failure #2's multi-minute-delayed delivery",
+    "A minimal, scripted repro exists for failure #2: issue a tap/url call, confirm it does not take effect within a short window (e.g. 5s), then confirm whether it takes effect later and how much later — characterizing the latency, not just asserting it's broken",
+    "Either a fix lands (input reliably lands within a bounded, short time and scroll actually moves content), or if the two failures are confirmed to be one root cause outside simemu's control (e.g. a CoreSimulatorService/Xcode 26.5 regression), that is documented clearly enough that the next agent doesn't re-discover it from scratch",
+    "`stabilize`/`ready`/`present` are checked as part of the fix: do they need to also drain or wait out this input queue before a screenshot can be trusted as reflecting a completed gesture?"
+  ],
+  "statusHistory": [
+    {
+      "status": "todo",
+      "ts": "2026-09-07T18:10:00.000Z"
+    }
+  ],
+  "attachments": [],
+  "stage": null,
+  "runStatus": null,
+  "stageHistory": [],
+  "recurring": null,
+  "createdAt": "2026-09-07T18:10:00.000Z",
+  "updatedAt": "2026-09-07T18:10:00.000Z",
+  "proofRequirements": [
+    "scripted repro for both failure modes, one of which currently demonstrates the bug (should fail pre-fix, pass post-fix)",
+    "a real scroll gesture verified end-to-end: claim session, scroll, screenshot diff shows real content movement beyond noise"
+  ],
+  "proofReferences": [],
+  "proofOverrides": [],
+  "surfaces": [],
+  "parityPair": null,
+  "validationOverrides": null,
+  "executionMode": null,
+  "taskGraph": null,
+  "runtime": null
+}
