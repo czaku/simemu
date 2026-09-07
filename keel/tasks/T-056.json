@@ -1,12 +1,12 @@
 {
   "id": "T-056",
-  "title": "v2 sessions have no release/do-based release path \u2014 leaked claims can only be waited out, not freed",
+  "title": "v2 sessions have no release/do-based release path — leaked claims can only be waited out, not freed",
   "description": "Observed 2026-09-06/07 while running demix visual-QA (T-LU-598 in the demix repo): a v2 claim session (s-e380bd, then later s-0edec9) showed up in `simemu claims` with its claimant PID already dead (ALIVE=no) well before its expires_at TTL. There is no way to explicitly free it: `simemu release <session>` does not exist for v2 sessions -- the top-level 'release' subcommand only operates on the OLDER v1 acquire/release reservation API ('Release a reserved simulator'), and the v2 API's own subcommand list (claim, do, config, sessions, lease, claims, locks, status, ...) has no release/free/unclaim verb at all. The only way a leaked v2 claim goes away is for something else (a later 'claim' call's own reaper) to notice the dead PID and reap it -- which it does do (confirmed: a subsequent 'simemu claim ios' call printed '[simemu-session] Reaped session <id> -- claimant PID dead' and cleaned it up), but there is no ON-DEMAND way for the agent that KNOWS it is done with a session to say so. This is the same subsystem as T-054 (idle timeout reaps a still-in-use claim too early) and T-LU-054 here (reaping keyed to claimant PID rather than device-in-use) but the opposite failure direction: T-054/T-LU-054 are about reaping TOO EAGERLY; this is about having NO voluntary way to release AT ALL, so claims can only be freed by (a) waiting for the claimant process to die and a future claim call's reaper to notice, or (b) T-054/T-LU-054's PID-liveness heuristic misfiring. Today three lanes lost evidence to claim problems in this same subsystem -- worth fixing as one coherent piece of work with T-054/T-LU-054 rather than three separate patches to the same reaping logic.",
   "product": null,
   "lane": null,
   "wave": null,
   "space": null,
-  "status": "todo",
+  "status": "done",
   "priority": "high",
   "platform": null,
   "assignee": null,
@@ -24,6 +24,10 @@
     {
       "status": "todo",
       "ts": "2026-09-06T23:13:37.094Z"
+    },
+    {
+      "status": "done",
+      "ts": "2026-09-07T12:04:02.359Z"
     }
   ],
   "attachments": [],
@@ -32,8 +36,17 @@
   "stageHistory": [],
   "recurring": null,
   "createdAt": "2026-09-06T23:13:37.085Z",
-  "updatedAt": "2026-09-06T23:13:37.085Z",
-  "proofReferences": [],
+  "updatedAt": "2026-09-07T12:04:01.418Z",
+  "proofReferences": [
+    {
+      "id": "P-001",
+      "kind": "artifact",
+      "ref": "proof/T-056/codex-verdict.txt",
+      "addedAt": "2026-09-07T12:04:01.417Z",
+      "addedBy": "claude",
+      "note": "Codex gate PASS (8 rounds). Added 'release' verb for v2 sessions (simemu release <sid>, and simemu do <sid> release as alias for done) -- frees the claim immediately, independent of the reaper."
+    }
+  ],
   "proofOverrides": [],
   "surfaces": [],
   "parityPair": null,

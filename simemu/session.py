@@ -112,6 +112,15 @@ class Session:
     claim_pgid: int | None = None
     claim_token: str | None = None
 
+    # Why an expired session was expired — "claimant_pid_dead" (reaped by the
+    # exclusive-claim liveness check), "idle_timeout" (crossed EXPIRE_TIMEOUT
+    # with no activity), or None (not expired, or expired before this field
+    # existed). Lets require_session() tell a caller the REAL reason instead
+    # of a blanket "inactivity" message that's actively misleading when the
+    # claim was actually reaped out from under a still-active holder.
+    reaped_reason: str | None = None
+    reaped_at: str | None = None
+
     # Stored claim spec for error recovery messages
     claim_platform: str = ""
     claim_form_factor: str = "phone"
@@ -1266,10 +1275,12 @@ def _is_effectively_expired(session: Session) -> bool:
     return datetime.now(timezone.utc) >= heartbeat + timedelta(seconds=EXPIRE_TIMEOUT)
 
 
-def _mark_expired(session_id: str) -> None:
+def _mark_expired(session_id: str, reason: str = "idle_timeout") -> None:
     with _locked_sessions() as (data, save):
         if session_id in data["sessions"] and data["sessions"][session_id].get("status") not in ("expired", "released"):
             data["sessions"][session_id]["status"] = "expired"
+            data["sessions"][session_id]["reaped_reason"] = reason
+            data["sessions"][session_id]["reaped_at"] = _now_iso()
             save(data)
 
 
@@ -1354,6 +1365,24 @@ def _reconcile_android_sessions_locked(data: dict) -> list[str]:
     return changed
 
 
+def _expiry_hint(session: Session) -> str:
+    """Actionable message for a session_expired error, tailored to WHY.
+
+    A blanket "expired after inactivity" is actively misleading when the
+    real cause was a liveness-reap (T-054/T-LU-054): the holder may have
+    been actively working the whole time. Say what actually happened so an
+    agent doesn't waste time assuming it was idle too long.
+    """
+    if session.reaped_reason == "claimant_pid_dead":
+        return (
+            "Session expired: claim was reaped because its owning process was no "
+            "longer detected as alive (not due to inactivity) — most likely because "
+            "the shell/process that ran 'simemu claim' has since exited. "
+            f"Re-claim with: {session.reclaim_command()}"
+        )
+    return f"Session expired after inactivity. Re-claim with: {session.reclaim_command()}"
+
+
 def require_session(session_id: str) -> Session:
     """Return a session by ID, or raise with actionable error."""
     session = get_session(session_id)
@@ -1364,19 +1393,28 @@ def require_session(session_id: str) -> Session:
             hint=f"Session '{session_id}' does not exist. Claim a new device with: simemu claim <platform>",
         )
     if _is_effectively_expired(session):
-        _mark_expired(session_id)
+        # `_is_effectively_expired` returns True both for a session that is
+        # ALREADY marked expired (any reason — PID-death reap, Android zombie
+        # cleanup, ...) and for one that has only now crossed the idle
+        # ceiling. Only the latter is actually an idle-timeout expiry; don't
+        # clobber a real reaped_reason that was already recorded.
+        if session.status != "expired":
+            _mark_expired(session_id, "idle_timeout")
+            session.reaped_reason = "idle_timeout"
         raise SessionError(
             error="session_expired",
             session=session_id,
-            hint=f"Session expired after inactivity. Re-claim with: {session.reclaim_command()}",
+            hint=_expiry_hint(session),
             expired_at=session.expires_at,
+            reaped_reason=session.reaped_reason,
         )
     if session.status == "expired":
         raise SessionError(
             error="session_expired",
             session=session_id,
-            hint=f"Session expired after inactivity. Re-claim with: {session.reclaim_command()}",
+            hint=_expiry_hint(session),
             expired_at=session.expires_at,
+            reaped_reason=session.reaped_reason,
         )
     if session.status == "released":
         raise SessionError(
@@ -1618,6 +1656,7 @@ _COMMAND_HELP: dict[str, str] = {
     "hide":             "Hide the simulator window (headless)",
     "renew":            "Extend session before it expires",
     "done":             "Release the session and free the device",
+    "release":          "Alias for 'done' — release the session and free the device",
     "reboot":           "Restart the simulator",
     "present":          "Present the iOS simulator window in a canonical position",
     "stabilize":        "Stabilize the iOS simulator window for reliable interaction",
@@ -1819,7 +1858,7 @@ def _do_macos_command(session: Session, command: str, args: list[str]) -> dict:
                 "hint": "Maestro does not support macOS. Use 'tap' with coordinates, "
                         "or AppleScript: 'tell application \"System Events\" to click button \"Name\" ...'."}
 
-    elif command in ("boot", "show", "hide", "renew", "done"):
+    elif command in ("boot", "show", "hide", "renew", "done", "release"):
         # These are handled by the main do_command dispatcher before reaching here.
         # If we get here somehow, they are no-ops for macOS.
         return {"status": "ok", "platform": "macos", "command": command}
@@ -1842,7 +1881,7 @@ def do_command(session_id: str, command: str, args: list[str]) -> dict | None:
     # T-12: Help command
     if command == "help":
         categories = {
-            "Session": ["boot", "show", "hide", "renew", "done", "reboot", "present", "stabilize"],
+            "Session": ["boot", "show", "hide", "renew", "done", "release", "reboot", "present", "stabilize"],
             "App": ["install", "launch", "terminate", "uninstall", "reset-app", "clear-data", "clean-retry",
                      "grant-all", "app-info", "verify-install", "repair-install", "app-container",
                      "is-running", "foreground-app"],
@@ -1865,7 +1904,7 @@ def do_command(session_id: str, command: str, args: list[str]) -> dict | None:
             result["commands"][cat] = {c: _COMMAND_HELP.get(c, "") for c in cmds}
         return result
 
-    if command == "done":
+    if command in ("done", "release"):
         session = release(session_id)
         return {"session": session_id, "status": "released"}
 

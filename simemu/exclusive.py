@@ -22,26 +22,221 @@ imports its helpers; tests can call them directly.
 from __future__ import annotations
 
 import os
+import subprocess
+import time
 from typing import Iterable
+
+# T-LU-054 / T-054: an agent almost never invokes `simemu` from a shell that
+# outlives a single command. Each tool call typically spawns a FRESH
+# `<shell> -c "simemu ..."` wrapper that execs simemu and exits the instant
+# that one command returns — regardless of whether the agent's actual task
+# is still running. os.getppid() lands on that wrapper, which is stale within
+# a fraction of a second, so a liveness check anchored there reads "dead"
+# almost continuously even while the real holder (the agent, or a long build
+# it kicked off in a separate call) is still very much active. This is the
+# confirmed root cause of claims being reaped mid-cycle, sometimes multiple
+# times within the same minute. See _find_durable_ancestor() below.
+_MAX_ANCESTOR_HOPS = 8
+_ONE_SHOT_SHELL_NAMES = frozenset({"zsh", "bash", "sh", "dash", "ksh"})
+
+
+_PS_RETRY_ATTEMPTS = 3
+_PS_RETRY_DELAY_SECONDS = 0.05
+
+
+def _ppid_and_command(pid: int) -> tuple[int | None, str | None]:
+    """Read `pid`'s parent PID and full command line from a SINGLE `ps` call.
+
+    Two separate `ps` invocations (one for ppid, one for command) leave a
+    TOCTOU window between them in which `pid` could exit and its slot get
+    reused by an unrelated process before the second call runs, making the
+    two fields describe two different processes. One call over both fields
+    is an atomic kernel snapshot — it either describes one real process or
+    fails outright; it cannot describe two.
+
+    Retries a bounded number of times ONLY when `ps` itself could not be run
+    (spawn failure, timeout) — a transient hiccup (e.g. a momentarily
+    overloaded box, exactly the "long xcodebuild eating CPU" scenario this
+    whole subsystem exists to tolerate). Does NOT retry a clean "no such
+    process" result (non-zero exit with `ps` running fine): that is `ps`
+    authoritatively reporting the pid is gone, not a hiccup — retrying
+    wouldn't change that answer, only delay reporting it.
+    """
+    for attempt in range(_PS_RETRY_ATTEMPTS):
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "ppid=,command=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            if attempt + 1 < _PS_RETRY_ATTEMPTS:
+                time.sleep(_PS_RETRY_DELAY_SECONDS)
+                continue
+            return None, None
+        break
+    if result.returncode != 0:
+        return None, None
+    line = result.stdout.strip("\n")
+    if not line.strip():
+        return None, None
+    # Leading field is PPID (no internal spaces); command is everything after
+    # the first run of whitespace, however many spaces/args it contains.
+    parts = line.strip().split(None, 1)
+    if not parts:
+        return None, None
+    try:
+        ppid = int(parts[0])
+    except ValueError:
+        return None, None
+    command = parts[1] if len(parts) > 1 else ""
+    return (ppid if ppid > 1 else None), (command or None)
+
+
+def _looks_like_one_shot_shell(command_line: str) -> bool:
+    """True when `command_line` is a shell invoked to run one command and exit.
+
+    Matches `zsh -c '...'`, `/bin/bash -lc "..."`, `sh -c ...`, etc. — any
+    invocation of a known shell with a `-c`-style flag (including combined
+    flags like `-lc`, and combined WITH an operand-taking flag like `-eo
+    errexit -c ...`), PROVIDED that flag appears before the first positional
+    argument.
+
+    Parses each leading `-`/`+`-prefixed token character by character (a
+    single short-option cluster, the way bash/zsh/ksh actually parse their
+    own argv), left to right, stopping at whichever of these it hits first:
+
+    - `c` (in a `-`-prefixed cluster only — there is no `+c` equivalent in
+      any of these shells): this IS the one-shot invocation flag.
+    - `o` or `O` (in either a `-` or `+`-prefixed cluster: `-o`/`+o` set a
+      named shell option, `-O`/`+O` a shopt option): this flag takes an
+      operand, which is either the rest of the SAME token if more characters
+      follow (e.g. `-oerrexit`) or the entire next token if nothing follows
+      (e.g. `-o errexit`, `-eo errexit`) — either way that operand is not
+      itself a flag and is skipped, not mistaken for the first positional
+      argument, so a real `-c` later in the invocation is still found.
+    - end of the token with neither hit: an ordinary toggle character (or
+      cluster of them, e.g. `-e`, `+eu`) with no operand — move to the next
+      token and keep scanning.
+
+    A long option (`--foo`, e.g. `--login`, `--restricted`) is a single named
+    flag, NOT a cluster of short-option characters — it is skipped whole,
+    never scanned character by character (a `c` appearing anywhere in its
+    name, e.g. "--res-c-tricted", is not the `-c` flag). None of these
+    shells' long options are `--command`, so a bare long option never
+    matches on its own; scanning continues to the next token. Bash's
+    `--rcfile`/`--init-file` are the one exception: they take a following
+    filename operand, which is skipped too rather than read as the first
+    positional argument. A BARE `--` is the
+    POSIX end-of-options marker: bash/zsh/ksh treat anything after it as a
+    positional argument (a script/file name), so a literal `-c` appearing
+    after `--` is that filename, not the flag, and scanning stops there.
+    Scanning also stops at the first genuine positional argument (a token
+    starting with neither `-` nor `+`), since everything after that is an
+    argument to a script/command, not a flag to the shell itself — without
+    this, `bash build.sh -c` (a durable script run, whose OWN arg happens to
+    be `-c`) would be misread as a one-shot `-c` invocation of bash itself.
+    An interactive or login shell with no `-c` flag (a human's terminal, a
+    persistent script shell) never matches, so behavior for those callers is
+    unchanged.
+    """
+    tokens = command_line.split()
+    if not tokens:
+        return False
+    exe = tokens[0].rsplit("/", 1)[-1]
+    if exe not in _ONE_SHOT_SHELL_NAMES:
+        return False
+    args = tokens[1:]
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--":
+            # End-of-options marker — nothing after this is a shell flag.
+            break
+        if tok == "-" or not (tok.startswith("-") or tok.startswith("+")):
+            # A bare "-" (read stdin) or a plain positional argument (a
+            # script path, or the first word of what -c already matched) —
+            # nothing past this point is a flag to the shell itself.
+            break
+        if tok.startswith("--"):
+            # A long option (e.g. "--login", "--restricted") is a single
+            # named flag, not a cluster of short-option characters — it must
+            # NOT be scanned character-by-character (a 'c' anywhere in its
+            # name, e.g. "--res-c-tricted", is not the -c flag). None of
+            # these shells' long options are "--command", so a bare one is
+            # just skipped with no match. Bash's --rcfile/--init-file are
+            # the exception: they take a following filename operand that
+            # must be skipped too, not read as a positional argument or
+            # scanned for -c.
+            i += 2 if tok in ("--rcfile", "--init-file") else 1
+            continue
+        is_dash = tok.startswith("-")
+        body = tok[1:]
+        consumed_next_token = False
+        for j, ch in enumerate(body):
+            if ch in ("o", "O"):
+                if j + 1 >= len(body):
+                    # Nothing left in this token — the operand is the next
+                    # whole token.
+                    consumed_next_token = True
+                break
+            if is_dash and ch == "c":
+                return True
+        i += 2 if consumed_next_token else 1
+    return False
+
+
+def _find_durable_ancestor(start_pid: int) -> int:
+    """Walk up from `start_pid`, skipping one-shot '<shell> -c ...' wrappers.
+
+    Lands on the nearest ancestor that is NOT itself a transient per-command
+    wrapper — in practice, the agent's own persistent CLI/harness process, an
+    orchestrator, or an interactive shell — which is a much closer proxy for
+    "is the holder of this claim still around" than the immediate parent.
+
+    Only ever returns a pid whose command line this function itself actually
+    read and confirmed durable in THIS same hop, or `start_pid` (the pre-
+    existing, already-shipped behavior). It never returns an unverified
+    intermediate ancestor: if a probe fails, or the hop limit is reached,
+    mid-walk — before a durable (non-one-shot) pid has been confirmed — the
+    walk gives up and falls back to `start_pid` rather than guessing that
+    whatever pid it last reached is safe. Guessing there was the bug: an
+    unverified ancestor could itself be a transient wrapper that exits
+    moments later, reproducing the exact premature-reap/double-claim failure
+    this walk exists to prevent.
+    """
+    pid = start_pid
+    for _ in range(_MAX_ANCESTOR_HOPS):
+        parent, command = _ppid_and_command(pid)
+        if command is None:
+            return start_pid
+        if not _looks_like_one_shot_shell(command):
+            return pid
+        if parent is None or parent == pid:
+            return start_pid
+        pid = parent
+    return start_pid
 
 
 def claimant_pid() -> int:
     """Return the PID that should be recorded as the claim owner.
 
     The simemu CLI is typically a short-lived process: an agent shell invokes
-    `simemu claim ios`, the CLI prints the session JSON and exits, and the
-    SHELL keeps the session alive across many follow-up `simemu do` calls.
-    If we recorded the CLI's own PID (os.getpid()), every claim would look
-    "stale" the moment the CLI exited, and a sibling claim attempt would
-    reap it — re-freeing the device for double-claim. That is exactly the
-    incident this module exists to prevent.
+    `simemu claim ios`, the CLI prints the session JSON and exits, and
+    whatever kept that invocation alive keeps the session alive across many
+    follow-up `simemu do` calls. If we recorded the CLI's own PID
+    (os.getpid()), every claim would look "stale" the moment the CLI exited,
+    and a sibling claim attempt would reap it — re-freeing the device for
+    double-claim. That is exactly the incident this module exists to
+    prevent.
 
     Resolution order:
 
     1. ``SIMEMU_CLAIMANT_PID`` — explicit override from a long-lived
        supervisor (e.g. an orchestrator that wants to bind the claim to its
        own PID).
-    2. ``os.getppid()`` — the shell / parent process. Survives the CLI exit.
+    2. ``os.getppid()``, walked up past any one-shot `<shell> -c ...`
+       wrapper (see `_find_durable_ancestor`) to the nearest ancestor that
+       actually survives between commands.
     3. ``os.getpid()`` — last-resort fallback (only when getppid fails).
     """
     env = os.environ.get("SIMEMU_CLAIMANT_PID")
@@ -55,7 +250,7 @@ def claimant_pid() -> int:
     try:
         ppid = os.getppid()
         if ppid and ppid > 1:
-            return ppid
+            return _find_durable_ancestor(ppid)
     except OSError:
         pass
     return os.getpid()

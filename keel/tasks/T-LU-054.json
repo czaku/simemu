@@ -1,12 +1,12 @@
 {
   "id": "T-LU-054",
   "title": "Guard claim reaping with device-in-use check",
-  "description": "collect_stale_session_ids() reaps a claim purely on is_pid_alive(claimant_pid). claimant_pid() binds the claim to os.getppid() \u2014 the shell that ran 'simemu claim'. When that shell is short-lived (zsh -c wrapper), the claim reads dead while the DEVICE is still in active use by a different process (xcodebuild -destination id=<udid>). _reap_dead_claims_locked then marks the session expired, freeing the device for a sibling to claim \u2014 producing the double-claim incident exclusive.py exists to prevent. Observed live: session s-32cc55 held chard (16D8CDC7) with dead claimant pid 62666 while xcodebuild ran a Vivii test against that same UDID.\n\nSee also: T-054 (symptom-level report of the same PID-liveness reaping issue, filed independently) and T-056 (v2 sessions have no on-demand release verb at all -- same claim-lifecycle subsystem).",
+  "description": "collect_stale_session_ids() reaps a claim purely on is_pid_alive(claimant_pid). claimant_pid() binds the claim to os.getppid() — the shell that ran 'simemu claim'. When that shell is short-lived (zsh -c wrapper), the claim reads dead while the DEVICE is still in active use by a different process (xcodebuild -destination id=<udid>). _reap_dead_claims_locked then marks the session expired, freeing the device for a sibling to claim — producing the double-claim incident exclusive.py exists to prevent. Observed live: session s-32cc55 held chard (16D8CDC7) with dead claimant pid 62666 while xcodebuild ran a Vivii test against that same UDID.\n\nSee also: T-054 (symptom-level report of the same PID-liveness reaping issue, filed independently) and T-056 (v2 sessions have no on-demand release verb at all -- same claim-lifecycle subsystem).",
   "product": null,
   "lane": null,
   "wave": "v2 Polish",
   "space": null,
-  "status": "blocked",
+  "status": "todo",
   "priority": "medium",
   "platform": null,
   "assignee": null,
@@ -19,6 +19,11 @@
       "at": "2026-08-04T23:33:17.441Z",
       "by": "human",
       "text": "codex gate returned FAIL. Guard fails OPEN: ps probe failure returns [] which reads as device-idle and reaps the claim - the exact double-claim the change prevents. Test test_probe_failure_does_not_block_reaping asserts the unsafe behaviour. Also TOCTTOU between snapshot and expiry write, and process table can be scanned twice under the session lock. Proof at proof/T-LU-054/codex-verdict.txt. NOT merged."
+    },
+    {
+      "at": "2026-09-07T12:04:24.631Z",
+      "by": "claude",
+      "text": "T-054's PID-liveness fix has landed (codex gate PASS, 8 rounds; proof/T-054/codex-verdict.txt) and takes a DIFFERENT approach than this task's original device-in-use-guard ask: it fixes claimant_pid() attribution itself (walks past one-shot '<shell> -c ...' wrapper processes to the nearest durable ancestor) rather than adding a device-in-use check. This resolves the wrapper-misattribution root cause behind this task's own observed incident (session s-32cc55) for the common case. It deliberately does NOT protect the narrower residual case this task's acceptance criteria describe: a genuinely-dead durable holder whose orphaned/detached child process (e.g. a surviving xcodebuild) is still using the device -- immediate dead-holder reclamation is now the explicit, deliberate design (per task owner's restated principle: 'a dead holder's claim should be reclaimable immediately by anyone who asks, not by luck'), so this residual gap is accepted, not fixed. The original blocking reason (2026-08-04 codex FAIL on a fail-open device-in-use-check prototype) no longer applies since that prototype was abandoned in favor of the shipped approach -- unblocking to todo. Left OPEN, not closed: re-scope or close explicitly if the residual orphaned-child-process case is still wanted, otherwise it can be closed as superseded by T-054."
     }
   ],
   "acceptanceCriteria": [
@@ -35,6 +40,10 @@
     {
       "status": "blocked",
       "ts": "2026-08-04T23:33:17.098Z"
+    },
+    {
+      "status": "todo",
+      "ts": "2026-09-07T12:04:29.278Z"
     }
   ],
   "attachments": [],
@@ -43,7 +52,7 @@
   "stageHistory": [],
   "recurring": null,
   "createdAt": "2026-08-04T22:41:40.290Z",
-  "updatedAt": "2026-08-04T23:33:17.441Z",
+  "updatedAt": "2026-09-07T12:04:28.416Z",
   "proofReferences": [],
   "proofOverrides": [],
   "surfaces": [],

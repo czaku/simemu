@@ -6,7 +6,7 @@
   "lane": null,
   "wave": null,
   "space": null,
-  "status": "todo",
+  "status": "done",
   "priority": "high",
   "platform": null,
   "assignee": null,
@@ -23,6 +23,10 @@
     {
       "status": "todo",
       "ts": "2026-09-06T20:20:21.601Z"
+    },
+    {
+      "status": "done",
+      "ts": "2026-09-07T12:03:50.924Z"
     }
   ],
   "attachments": [],
@@ -31,8 +35,17 @@
   "stageHistory": [],
   "recurring": null,
   "createdAt": "2026-09-06T20:20:21.197Z",
-  "updatedAt": "2026-09-06T20:20:45.935Z",
-  "proofReferences": [],
+  "updatedAt": "2026-09-07T12:03:48.833Z",
+  "proofReferences": [
+    {
+      "id": "P-001",
+      "kind": "artifact",
+      "ref": "proof/T-054/codex-verdict.txt",
+      "addedAt": "2026-09-07T12:03:45.906Z",
+      "addedBy": "claude",
+      "note": "Codex gate PASS (8 rounds, fresh session per round). PID liveness now anchored via ancestor walk past one-shot shell wrappers instead of the immediate parent; claim survives idle time as long as its holder PID is alive."
+    }
+  ],
   "proofOverrides": [],
   "surfaces": [],
   "parityPair": null,

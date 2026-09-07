@@ -42,6 +42,11 @@ class CliParserTests(unittest.TestCase):
         self.assertTrue(args.visible)
         self.assertEqual(args.label, "test")
 
+    def test_release_parser_accepts_v2_session_id(self) -> None:
+        args = self.parser.parse_args(["release", "s-abc123"])
+        self.assertEqual(args.slug, "s-abc123")
+        self.assertEqual(args.func, cli.cmd_release)
+
     def test_rename_parser(self) -> None:
         args = self.parser.parse_args(["rename", "s-abc123", "luke-iphone"])
         self.assertEqual(args.slug, "s-abc123")
@@ -122,6 +127,14 @@ class CliLegacyRejectionTests(unittest.TestCase):
                     cli.cmd_release(args)
         self.assertEqual(ctx.exception.code, 1)
         release_mock.assert_not_called()
+
+    def test_release_is_not_globally_legacy_rejected(self) -> None:
+        """cmd_release must actually run (not get short-circuited by main()'s
+        blanket legacy gate) so it can tell a v2 session id apart from a
+        legacy slug itself. Without this, T-056's dead end reproduces: any
+        `simemu release <v2-id>` bounces off the generic legacy error before
+        cmd_release ever sees the argument."""
+        self.assertIn("cmd_release", cli._V2_COMMANDS)
 
     def test_legacy_install_rejected(self) -> None:
         with patch.dict(os.environ, self._env):
@@ -234,6 +247,43 @@ class CliHandlerTests(unittest.TestCase):
         do_mock.assert_called_once_with("s-abc123", "screenshot", [])
         output = json.loads(stdout.getvalue())
         self.assertEqual(output["path"], "/tmp/shot.png")
+
+    def test_release_routes_v2_session_id_to_session_release(self) -> None:
+        """T-056: `simemu release s-xxxxxx` must reach the real v2 release
+        path instead of dead-ending on the discontinued-legacy error."""
+        session = self._make_session()
+        args = Namespace(command="release", slug="s-abc123")
+        stdout = io.StringIO()
+
+        with patch("simemu.cli.session_module.release", return_value=session) as release_mock:
+            with redirect_stdout(stdout):
+                cli.cmd_release(args)
+
+        release_mock.assert_called_once_with("s-abc123")
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(output["session"], "s-abc123")
+        self.assertEqual(output["status"], "released")
+
+    def test_release_v2_session_id_reports_clear_error_not_found(self) -> None:
+        """Releasing an unknown/already-gone v2 session fails loudly with the
+        real structured error instead of the generic legacy message."""
+        args = Namespace(command="release", slug="s-deadbe")
+        stdout = io.StringIO()
+
+        with patch(
+            "simemu.cli.session_module.release",
+            side_effect=SessionError(
+                error="session_not_found", session="s-deadbe",
+                hint="Session 's-deadbe' does not exist.",
+            ),
+        ):
+            with redirect_stdout(stdout):
+                with self.assertRaises(SystemExit) as ctx:
+                    cli.cmd_release(args)
+
+        self.assertEqual(ctx.exception.code, 1)
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(output["error"], "session_not_found")
 
     def test_sessions_shows_active(self) -> None:
         session = self._make_session()
