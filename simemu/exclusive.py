@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from typing import Iterable
 
 # T-LU-054 / T-054: an agent almost never invokes `simemu` from a shell that
@@ -39,6 +40,10 @@ _MAX_ANCESTOR_HOPS = 8
 _ONE_SHOT_SHELL_NAMES = frozenset({"zsh", "bash", "sh", "dash", "ksh"})
 
 
+_PS_RETRY_ATTEMPTS = 3
+_PS_RETRY_DELAY_SECONDS = 0.05
+
+
 def _ppid_and_command(pid: int) -> tuple[int | None, str | None]:
     """Read `pid`'s parent PID and full command line from a SINGLE `ps` call.
 
@@ -48,14 +53,27 @@ def _ppid_and_command(pid: int) -> tuple[int | None, str | None]:
     two fields describe two different processes. One call over both fields
     is an atomic kernel snapshot — it either describes one real process or
     fails outright; it cannot describe two.
+
+    Retries a bounded number of times ONLY when `ps` itself could not be run
+    (spawn failure, timeout) — a transient hiccup (e.g. a momentarily
+    overloaded box, exactly the "long xcodebuild eating CPU" scenario this
+    whole subsystem exists to tolerate). Does NOT retry a clean "no such
+    process" result (non-zero exit with `ps` running fine): that is `ps`
+    authoritatively reporting the pid is gone, not a hiccup — retrying
+    wouldn't change that answer, only delay reporting it.
     """
-    try:
-        result = subprocess.run(
-            ["ps", "-o", "ppid=,command=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=2,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None, None
+    for attempt in range(_PS_RETRY_ATTEMPTS):
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "ppid=,command=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            if attempt + 1 < _PS_RETRY_ATTEMPTS:
+                time.sleep(_PS_RETRY_DELAY_SECONDS)
+                continue
+            return None, None
+        break
     if result.returncode != 0:
         return None, None
     line = result.stdout.strip("\n")
@@ -80,15 +98,22 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
     Matches `zsh -c '...'`, `/bin/bash -lc "..."`, `sh -c ...`, etc. — any
     invocation of a known shell with a `-c`-style flag (including combined
     flags like `-lc`), PROVIDED that flag appears before the first positional
-    argument. Long-form options (`--foo`) are ignored since none of these
-    shells use `--command`, and scanning continues past them. Scanning STOPS
-    at the first positional (non-flag) token, since everything after that is
-    an argument to a script/command, not a flag to the shell itself — without
-    this, `bash build.sh -c` (a durable script run, whose OWN arg happens to
-    be `-c`) would be misread as a one-shot `-c` invocation of bash itself.
-    An interactive or login shell with no `-c` flag (a human's terminal, a
-    persistent script shell) never matches, so behavior for those callers is
-    unchanged.
+    argument. Long-form options (`--foo`, e.g. `--login`) are ignored since
+    none of these shells use `--command`, and scanning continues past them —
+    but a BARE `--` is the POSIX end-of-options marker: bash/zsh/ksh treat
+    anything after it as a positional argument (a script/file name), so a
+    literal `-c` appearing after `--` is that filename, not the flag, and
+    scanning stops there. `-o`/`+o` (set a named shell option, e.g. `-o
+    errexit`) take a following operand that is NOT itself a flag — it's
+    skipped rather than treated as the first positional argument, so a real
+    `-c` later in the same invocation (e.g. `bash -o errexit -c '...'`) is
+    still found. Scanning otherwise STOPS at the first positional (non-flag)
+    token, since everything after that is an argument to a script/command,
+    not a flag to the shell itself — without this, `bash build.sh -c` (a
+    durable script run, whose OWN arg happens to be `-c`) would be misread as
+    a one-shot `-c` invocation of bash itself. An interactive or login shell
+    with no `-c` flag (a human's terminal, a persistent script shell) never
+    matches, so behavior for those callers is unchanged.
     """
     tokens = command_line.split()
     if not tokens:
@@ -96,16 +121,27 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
     exe = tokens[0].rsplit("/", 1)[-1]
     if exe not in _ONE_SHOT_SHELL_NAMES:
         return False
-    for tok in tokens[1:]:
+    args = tokens[1:]
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--":
+            # End-of-options marker — nothing after this is a shell flag.
+            break
         if tok == "-" or not tok.startswith("-"):
             # A bare "-" (read stdin) or a plain positional argument (a
             # script path, or the first word of what -c already matched) —
             # nothing past this point is a flag to the shell itself.
             break
-        if tok.startswith("--"):
+        if tok in ("-o", "+o"):
+            # Takes a following operand (e.g. "errexit") that is itself not
+            # a flag — skip it rather than treating it as the first
+            # positional argument.
+            i += 2
             continue
-        if "c" in tok[1:]:
+        if not tok.startswith("--") and "c" in tok[1:]:
             return True
+        i += 1
     return False
 
 

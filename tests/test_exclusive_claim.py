@@ -447,6 +447,56 @@ class ExclusiveClaimMultiprocessTests(unittest.TestCase):
             self.assertEqual(len(set(session_ids)), 4)
 
 
+class PpidAndCommandRetryTests(unittest.TestCase):
+    """Unit tests for exclusive._ppid_and_command's bounded retry.
+
+    Gate finding (round 2): a `ps` probe failure was treated identically to a
+    confirmed "no such process," even though a spawn/timeout failure is
+    plausibly transient (a momentarily overloaded box -- the exact "long
+    xcodebuild eating CPU" scenario this subsystem exists to tolerate) while
+    a clean non-zero exit is `ps` authoritatively reporting the pid is gone.
+    """
+
+    def test_retries_on_transient_subprocess_failure_then_succeeds(self) -> None:
+        calls = {"n": 0}
+
+        def fake_run(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("transient")
+            return subprocess.CompletedProcess(args, 0, stdout="123 /usr/bin/durable\n", stderr="")
+
+        with patch("simemu.exclusive.subprocess.run", side_effect=fake_run), \
+             patch("simemu.exclusive.time.sleep"):
+            parent, command = exclusive._ppid_and_command(999)
+        self.assertEqual(parent, 123)
+        self.assertEqual(command, "/usr/bin/durable")
+        self.assertEqual(calls["n"], 3)
+
+    def test_gives_up_after_bounded_retries(self) -> None:
+        with patch("simemu.exclusive.subprocess.run", side_effect=OSError("gone")), \
+             patch("simemu.exclusive.time.sleep") as mock_sleep:
+            parent, command = exclusive._ppid_and_command(999)
+        self.assertEqual((parent, command), (None, None))
+        self.assertEqual(mock_sleep.call_count, exclusive._PS_RETRY_ATTEMPTS - 1)
+
+    def test_does_not_retry_a_clean_no_such_process_result(self) -> None:
+        """A non-zero exit with `ps` running fine is authoritative -- the pid
+        is confirmed gone, not a hiccup. Retrying wouldn't change that."""
+        calls = {"n": 0}
+
+        def fake_run(*args, **kwargs):
+            calls["n"] += 1
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+        with patch("simemu.exclusive.subprocess.run", side_effect=fake_run), \
+             patch("simemu.exclusive.time.sleep") as mock_sleep:
+            parent, command = exclusive._ppid_and_command(999)
+        self.assertEqual((parent, command), (None, None))
+        self.assertEqual(calls["n"], 1)
+        mock_sleep.assert_not_called()
+
+
 class OneShotShellDetectionTests(unittest.TestCase):
     """Unit tests for exclusive._looks_like_one_shot_shell."""
 
@@ -479,6 +529,19 @@ class OneShotShellDetectionTests(unittest.TestCase):
         own -c flag: 'bash build.sh -c' is a durable script run (build.sh is
         the first positional argument), not a one-shot -c invocation."""
         self.assertFalse(exclusive._looks_like_one_shot_shell("bash build.sh -c"))
+
+    def test_dash_o_option_operand_is_not_mistaken_for_positional(self) -> None:
+        """'-o errexit' sets a shell option and takes an operand that is NOT
+        itself a flag -- it must be skipped, not mistaken for the first
+        positional argument, so a real -c later on is still detected."""
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash -o errexit -c cmd"))
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash -o errexit -o nounset -c cmd"))
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash -o"))
+
+    def test_end_of_options_marker_stops_flag_scanning(self) -> None:
+        """A bare '--' is the POSIX end-of-options marker: bash treats a
+        literal '-c' after it as a positional filename, not the -c flag."""
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash -- -c"))
 
 
 class DurableAncestorTests(unittest.TestCase):
