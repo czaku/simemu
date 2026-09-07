@@ -138,6 +138,7 @@
 | T-033 | Desktop lease coordination — simemu present command for canonical window placement and focus management | — | done | high | — | — |
 | T-054 | v2 session idle timeout is too aggressive for a build-and-test cycle, silently hands device to another claimant | — | done | high | — | — |
 | T-056 | v2 sessions have no release/do-based release path — leaked claims can only be waited out, not freed | — | done | high | — | — |
+| T-057 | v2 claim liveness cannot survive separate ssh invocations to the same remote host | — | todo | medium | — | — |
 | T-LU-048 | privacy: Maintainer's home path + username hardcoded in SHIPPING source: simemu/device.py:300 sets _PYMOBILEDEVICE… | — | todo | high | — | launch-readiness |
 | T-LU-049 | privacy: Private/internal product names (goala, sitches, fitkind, univiirse, vivii, up2much, StrikeThePose, settle… | — | todo | high | — | launch-readiness |
 | T-LU-050 | privacy: tests/test_docs_regression.py:30-35 hardcodes absolute paths to the maintainer's private projects: /Users… | — | todo | medium | — | launch-readiness |

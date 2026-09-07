@@ -1,0 +1,48 @@
+{
+  "id": "T-057",
+  "title": "v2 claim liveness cannot survive separate ssh invocations to the same remote host",
+  "description": "Observed 2026-09-07 during T-LU-613 (build-tile-glass-fix, relayed via team-lead): on studio, `simemu claim ios` returns expires_at ~20min out, but the very next `simemu do <session> ...` call -- issued from a FRESH, separate `ssh studio 'bash -lc \"simemu do <session> ...\"'` invocation -- reports session_expired after roughly 7 seconds, nowhere near the real TTL.\n\nROOT CAUSE, and why the T-054 ancestor-walk fix (merged 2026-09-07, simemu 0.5.1) does NOT cover this case: T-054 fixed claimant_pid() to walk from the immediate parent PID past one-shot \"<shell> -c ...\" wrapper processes to the nearest durable ancestor, so a claim survives as long as SOME process in that ancestry chain stays alive between `simemu do` calls. That works when the calls all happen inside one long-lived local process tree (an agent CLI spawning fresh wrapper shells per tool call). It does NOT work across SEPARATE ssh invocations to the same remote host: each standalone `ssh host 'cmd'` call opens its own ssh connection, and when that command returns, ssh closes the connection and the ENTIRE remote process tree for it -- the per-connection sshd session handler, the login shell, and simemu itself -- terminates. There is no process on the remote host that persists between two separate, non-multiplexed `ssh host 'cmd'` invocations, so no matter how far up the ancestor walk goes, it lands on a process that is itself about to die the moment that particular ssh connection closes. This is a structurally different failure than what T-054 fixed: T-054 is about wrapper churn WITHIN one persistent process tree; this is about there being NO persistent process tree at all across calls.\n\nTWO REAL FIXES, not workarounds -- already validated informally, worth landing properly:\n1. SSH connection multiplexing: `ssh -o ControlMaster=auto -o ControlPersist=<time> ...` (or an equivalent ssh_config `ControlPath`/`ControlPersist` stanza) makes separate `ssh host 'cmd'` invocations share ONE persistent underlying connection process on the remote host. The existing T-054 ancestor-walk would then correctly identify that persistent connection process as the durable claim holder, since it genuinely does survive between calls. This is the structural fix for agents that must issue `simemu` commands as separate ssh invocations.\n2. Single persistent ssh session: keep the whole claim -- claim, all `do` calls, release -- inside ONE long-lived ssh session (interactive, or a backgrounded persistent shell) for as long as the claim is held, using `simemu do <session> renew` between long steps to keep the heartbeat/idle-timeout fresh. This is the currently-recommended workaround and requires no simemu or ssh-config changes.\n\nCurrently undocumented: AGENT_README.md (and any other agent-facing guidance) says nothing about this ssh-specific failure mode, so an agent hitting it has no way to self-diagnose beyond re-deriving the ancestor-walk limitation from scratch.",
+  "product": null,
+  "lane": null,
+  "wave": null,
+  "space": null,
+  "status": "todo",
+  "priority": "medium",
+  "platform": null,
+  "assignee": null,
+  "dependsOn": [],
+  "spec": null,
+  "parentId": null,
+  "dueDate": null,
+  "context": [],
+  "acceptanceCriteria": [
+    "AGENT_README.md (or equivalent agent-facing doc) explicitly documents that separate, non-multiplexed ssh invocations do NOT share a durable claim owner, and gives both the ControlPersist and single-persistent-session workarounds",
+    "Verified end-to-end: a claim survives at least 3 separate 'ssh host <cmd>' invocations to the same remote host when those invocations are multiplexed over one persistent connection (ControlMaster/ControlPersist)",
+    "Verified the existing reaped_reason=claimant_pid_dead hint (shipped in T-054) is what an agent actually sees when hitting this specific ssh-teardown case, not a generic/confusing 'expired after inactivity' message -- fix the hint if it is not already reliably distinguishing the two"
+  ],
+  "statusHistory": [
+    {
+      "status": "todo",
+      "ts": "2026-09-07T13:10:53.687Z"
+    }
+  ],
+  "attachments": [],
+  "stage": null,
+  "runStatus": null,
+  "stageHistory": [],
+  "recurring": null,
+  "createdAt": "2026-09-07T13:10:52.620Z",
+  "updatedAt": "2026-09-07T13:10:52.620Z",
+  "proofRequirements": [
+    "Repro script or log showing a claim reaped within seconds of a fresh non-multiplexed ssh invocation, then the same sequence surviving with ControlPersist enabled",
+    "Updated AGENT_README.md section covering the ssh-specific failure mode and both workarounds"
+  ],
+  "proofReferences": [],
+  "proofOverrides": [],
+  "surfaces": [],
+  "parityPair": null,
+  "validationOverrides": null,
+  "executionMode": null,
+  "taskGraph": null,
+  "runtime": null
+}
