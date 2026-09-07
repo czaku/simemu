@@ -574,6 +574,15 @@ class OneShotShellDetectionTests(unittest.TestCase):
         # of its operand -- this does NOT mean "-o combined with -c".
         self.assertFalse(exclusive._looks_like_one_shot_shell("bash -oc"))
 
+    def test_long_option_is_not_scanned_character_by_character(self) -> None:
+        """A long option ('--foo') is one named flag, not a short-option
+        cluster -- a 'c' appearing anywhere in its NAME (e.g.
+        '--restricted' contains a 'c') must not be mistaken for the -c
+        flag. A real -c token elsewhere in the invocation is still found."""
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash --restricted build.sh"))
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash --restricted -c cmd"))
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash --login -c cmd"))
+
     def test_end_of_options_marker_stops_flag_scanning(self) -> None:
         """A bare '--' is the POSIX end-of-options marker: bash treats a
         literal '-c' after it as a positional filename, not the -c flag."""

@@ -118,8 +118,13 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
       cluster of them, e.g. `-e`, `+eu`) with no operand — move to the next
       token and keep scanning.
 
-    A long option (`--foo`, e.g. `--login`) is treated the same as any other
-    non-o/O, non-c cluster: skipped, scanning continues. A BARE `--` is the
+    A long option (`--foo`, e.g. `--login`, `--restricted`) is a single named
+    flag, NOT a cluster of short-option characters — it is skipped whole,
+    never scanned character by character (a `c` appearing anywhere in its
+    name, e.g. "--res-c-tricted", is not the `-c` flag). None of these
+    shells' long options are `--command`, so a bare long option never
+    matches on its own; scanning continues to the next token. A BARE `--` is
+    the
     POSIX end-of-options marker: bash/zsh/ksh treat anything after it as a
     positional argument (a script/file name), so a literal `-c` appearing
     after `--` is that filename, not the flag, and scanning stops there.
@@ -150,6 +155,15 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
             # script path, or the first word of what -c already matched) —
             # nothing past this point is a flag to the shell itself.
             break
+        if tok.startswith("--"):
+            # A long option (e.g. "--login", "--restricted") is a single
+            # named flag, not a cluster of short-option characters — it must
+            # NOT be scanned character-by-character (a 'c' anywhere in its
+            # name, e.g. "--res-c-tricted", is not the -c flag). None of
+            # these shells' long options are "--command", so it's just
+            # skipped with no operand and no match.
+            i += 1
+            continue
         is_dash = tok.startswith("-")
         body = tok[1:]
         consumed_next_token = False
