@@ -14,7 +14,13 @@
   "spec": null,
   "parentId": null,
   "dueDate": null,
-  "context": [],
+  "context": [
+    {
+      "at": "2026-09-07T14:38:07.122Z",
+      "by": "human",
+      "text": "Additional finding from a separate repro (demix, mac-studio, 2026-09-07): simemu do SESSION a11y-tap hung indefinitely rather than failing fast. The process it spawned (xcodebuild test-without-building against a maestro-driver-ios-config.xctestrun) was bound to a DIFFERENT simulator (cabbage) than the one actually claimed by the session -- not scoped to the session's own device. Had to kill the stray process manually (PID identified via ps, no timeout on the command itself). Worth covering in the same fix pass if a11y-tap shares the claim-liveness code path, or filing separately if it is an unrelated device-scoping bug in the maestro driver selection."
+    }
+  ],
   "acceptanceCriteria": [
     "AGENT_README.md (or equivalent agent-facing doc) explicitly documents that separate, non-multiplexed ssh invocations do NOT share a durable claim owner, and gives both the ControlPersist and single-persistent-session workarounds",
     "Verified end-to-end: a claim survives at least 3 separate 'ssh host <cmd>' invocations to the same remote host when those invocations are multiplexed over one persistent connection (ControlMaster/ControlPersist)",
@@ -32,7 +38,7 @@
   "stageHistory": [],
   "recurring": null,
   "createdAt": "2026-09-07T13:10:52.620Z",
-  "updatedAt": "2026-09-07T13:10:52.620Z",
+  "updatedAt": "2026-09-07T14:38:07.122Z",
   "proofRequirements": [
     "Repro script or log showing a claim reaped within seconds of a fresh non-multiplexed ssh invocation, then the same sequence surviving with ControlPersist enabled",
     "Updated AGENT_README.md section covering the ssh-specific failure mode and both workarounds"
