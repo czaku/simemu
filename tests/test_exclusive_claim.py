@@ -538,6 +538,13 @@ class OneShotShellDetectionTests(unittest.TestCase):
         self.assertTrue(exclusive._looks_like_one_shot_shell("bash -o errexit -o nounset -c cmd"))
         self.assertFalse(exclusive._looks_like_one_shot_shell("bash -o"))
 
+    def test_plus_o_option_operand_is_not_mistaken_for_positional(self) -> None:
+        """'+o' (unset a shell option) is the '-o' toggle's counterpart and
+        must be recognized the same way -- it does NOT start with '-', so a
+        naive positional-argument check would misread it as one."""
+        self.assertTrue(exclusive._looks_like_one_shot_shell("bash +o errexit -c cmd"))
+        self.assertFalse(exclusive._looks_like_one_shot_shell("bash +o"))
+
     def test_end_of_options_marker_stops_flag_scanning(self) -> None:
         """A bare '--' is the POSIX end-of-options marker: bash treats a
         literal '-c' after it as a positional filename, not the -c flag."""

@@ -128,17 +128,19 @@ def _looks_like_one_shot_shell(command_line: str) -> bool:
         if tok == "--":
             # End-of-options marker — nothing after this is a shell flag.
             break
+        if tok in ("-o", "+o"):
+            # Takes a following operand (e.g. "errexit") that is itself not
+            # a flag — skip it rather than treating it as the first
+            # positional argument. Checked BEFORE the bare-"-"/positional
+            # test below, since "+o" itself does not start with "-" and
+            # would otherwise be misread as a positional argument.
+            i += 2
+            continue
         if tok == "-" or not tok.startswith("-"):
             # A bare "-" (read stdin) or a plain positional argument (a
             # script path, or the first word of what -c already matched) —
             # nothing past this point is a flag to the shell itself.
             break
-        if tok in ("-o", "+o"):
-            # Takes a following operand (e.g. "errexit") that is itself not
-            # a flag — skip it rather than treating it as the first
-            # positional argument.
-            i += 2
-            continue
         if not tok.startswith("--") and "c" in tok[1:]:
             return True
         i += 1
