@@ -1,0 +1,5 @@
+VERDICT: PASS
+HIGH: 0
+SUMMARY: The fix correctly skips --rcfile/--init-file and their operand, detects a subsequent -c, and safely returns False for both incomplete cases. No new findings in this focused diff review; 700 passed, 0 failed reported by you, not independently executed.
+FINDINGS:
+- None.
