@@ -1,0 +1,43 @@
+{
+  "id": "T-058",
+  "title": "simemu claim liveness breaks across separate ssh invocations (cross-connection, not wrapper churn)",
+  "description": "Confirmed by fix-simemu 2026-09-07: T-054's ancestor-walk fix (walk past one-shot <shell> -c wrapper processes to the nearest durable ancestor) solves the single-machine wrapper-churn case, but does NOT solve claim liveness across separate ssh studio 'bash -lc ...' invocations from a remote orchestrator machine — each ssh call opens a new connection whose entire remote process tree (sshd handler, bash, simemu) tears down when it returns, so there is no durable remote-side process for PID-based liveness to anchor to no matter how far the ancestor walk goes. Observed directly: simemu claim ios returned expires_at 20min out, but the very next simemu do <session> ... call in a fresh ssh invocation reported session_expired after ~7-13s, every time, across 5+ repro attempts. Two real fixes proposed by fix-simemu: (1) document/support one long-lived ssh session + simemu do <session> renew between long steps as the correct pattern for cross-machine orchestration (works today, no code change) — this is what the T-LU-613 lane used to work around it; (2) if separate ssh 'cmd' invocations should keep working, support SSH ControlMaster/ControlPersist multiplexing so the ancestor-walk lands on the persistent connection process. A simemu do <session> release/simemu release <session> command now exists for explicit cleanup of leaked claims either way.",
+  "product": "simemu",
+  "lane": null,
+  "wave": null,
+  "space": null,
+  "status": "todo",
+  "priority": "medium",
+  "platform": null,
+  "assignee": null,
+  "dependsOn": [],
+  "spec": null,
+  "parentId": null,
+  "dueDate": null,
+  "context": [],
+  "acceptanceCriteria": [
+    "Either the multi-ssh-invocation liveness gap is fixed (ControlMaster-aware ancestor walk or equivalent), or it is explicitly documented as unsupported with the long-lived-session + renew pattern as the recommended workaround",
+    "A repro test exists: claim via one ssh invocation, do via a second separate ssh invocation, assert the session is NOT reported expired if within its real TTL"
+  ],
+  "statusHistory": [
+    {
+      "status": "todo",
+      "ts": "2026-09-07T14:05:15.564Z"
+    }
+  ],
+  "attachments": [],
+  "stage": null,
+  "runStatus": null,
+  "stageHistory": [],
+  "recurring": null,
+  "createdAt": "2026-09-07T14:05:14.678Z",
+  "updatedAt": "2026-09-07T14:05:14.678Z",
+  "proofReferences": [],
+  "proofOverrides": [],
+  "surfaces": [],
+  "parityPair": null,
+  "validationOverrides": null,
+  "executionMode": null,
+  "taskGraph": null,
+  "runtime": null
+}
